@@ -1,0 +1,23 @@
+.catkin_tools/
+build
+devel
+logs
+.catkin_tools/
+build/
+devel/
+logs/
+*.o
+*.stamp
+src/.vscode/
+data
+*.bag
+*.engine
+*.jpg
+*.csv
+*.png
+# 添加了launch文件
+# ./src/panorama/launch/davis_live.launch
+# ./src/panorama/launch/davis.launch
+
+*.nsys-rep 
+*.sqlite 

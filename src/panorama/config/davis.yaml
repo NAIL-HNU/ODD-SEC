@@ -1,0 +1,30 @@
+image_width: 640       # 图像宽度（像素）
+image_height: 480      # 图像高度（像素）
+camera_name: DAVIS-00000254  # 相机名称（自定义标识）
+
+# 相机内参矩阵（3x3，fx, fy, cx, cy）
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [248.164664, 0.0, 180.656470, 0.0, 247.767991, 128.095613, 0.0, 0.0, 1.0]
+
+# 畸变模型（plumb_bob 即 OpenCV 的 Brown-Conrady 模型）
+distortion_model: plumb_bob  
+
+# 畸变系数（k1, k2, p1, p2, k3）
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [-0.358120, 0.115127, -0.000407, -0.000244, 0.0]
+
+# 矫正矩阵（通常为单位矩阵，除非经过立体校正）
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+
+# 投影矩阵（3x4，用于立体视觉，单相机时最后一列通常为0）
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [196.412277, 0.0, 184.504709, 0.0, 0.0, 220.210480, 127.431908, 0.0, 0.0, 0.0, 1.0, 0.0]
