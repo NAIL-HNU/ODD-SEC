@@ -42,6 +42,7 @@ public:
 
     std::vector<Detection> detect(const std::vector<cv::Mat>& sequence_images, std::string time_path, ros::Time t0);
     void show_count_image(cv::Mat& count_image, const std::vector<Detection>& detections, ros::Time& stamp);
+    // Converts a detection center from model-image coordinates to a world bearing.
     void AngleCalculations(float x,float y,ros::Time& t0,ros::Time& stamp);
     std::vector<cv::Mat> createSequenceImages(const std::vector<int>& count_image, int camera_width, int camera_height, int num_channels);
 private:
@@ -83,6 +84,7 @@ private:
     nvinfer1::IExecutionContext* m_context = nullptr;
     nvinfer1::IRuntime* m_runtime = nullptr;
     cudaStream_t m_cuda_stream = nullptr;
+    // TensorRT bindings: [0] image input, [1] temporal input, [2] output.
     void* m_gpu_buffers[3] = {nullptr};
     nvinfer1::Dims m_input_dims, m_output_dims;
     int m_input_c = 3;

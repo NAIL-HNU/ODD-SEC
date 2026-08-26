@@ -16,15 +16,19 @@ namespace panorama {
 
 struct OptionsProcess
 {
+    // Objective selector: 0 = variance, 1 = RMS.
     int contrast_measure;
 };
 
 struct OptionsWarp
 {
+    // Gaussian smoothing width in pixels.
     double blur_sigma;
 
+    // Events in one batch share a common camera pose.
     int event_batch_size;
 
+    // Keep one event for every event_sample_rate input events.
     int event_sample_rate;
 };
 
@@ -32,6 +36,7 @@ struct OptionsImage
 {
     int panorama_height;
     int panorama_width;
+    // Row-major 3 x 3 rotation matrix as stored by the ROS parameter server.
     std::vector<double> R_matrix;
 };
 
@@ -51,7 +56,7 @@ struct OptionTraj
 {
     double dt_knots;  // seconds
 
-    int spline_degree;
+    int spline_degree;  // 1 = linear, 3 = cubic
 };
 
 struct OptionPanoMap
@@ -89,11 +94,12 @@ struct OptionsAA
 {
     int x_patches;
     int y_patches;
-    double decay_sec;
+    double decay_sec;  // seconds
 };
 
 struct Optionsbias
 {
+    // Gyroscope bias in radians per second.
     double gyro_bias_x;
     double gyro_bias_y;
     double gyro_bias_z;

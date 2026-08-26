@@ -1,22 +1,83 @@
-.catkin_tools/
-build
-devel
-logs
+# ROS and catkin workspaces
 .catkin_tools/
 build/
 devel/
+install/
+log/
 logs/
-*.o
-*.stamp
-src/.vscode/
-data
-*.bag
-*.engine
-*.jpg
-*.csv
-*.png
-# ./src/panorama/launch/davis_live.launch
-# ./src/panorama/launch/davis.launch
 
-*.nsys-rep 
-*.sqlite 
+# CMake-generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+compile_commands.json
+*.stamp
+
+# Compiled artifacts
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+/src/panorama/src/eigen_test
+
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Editors and operating systems
+.vscode/
+.idea/
+*.code-workspace
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Datasets, models, and generated runtime output
+/data/
+/output/
+/outputs/
+/results/
+*.bag
+*.bag.active
+*.db3
+*.engine
+*.npy
+*.npz
+*.bin
+*_first_frame_debug.png
+*_first_frame_original.png
+*_first_frame_rotated.png
+*_panorama_output.txt
+*_time_consume.txt
+
+# Profiling and analysis output
+/analysis_report.txt
+*.nsys-rep
+*.qdrep
+*.sqlite
+*.sqlite3
+ros_nodes_top.txt
+
+# Test and coverage output
+.coverage
+coverage/
+htmlcov/

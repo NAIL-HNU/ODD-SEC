@@ -8,6 +8,7 @@
 #include <cstdlib>
 
 struct EventData {
+    // Each output record contains a microsecond timestamp and one packed event word.
     uint32_t t;
     uint32_t raw;  // polarity[28], y[27:14], x[13:0]
 };
@@ -67,6 +68,7 @@ int main(int argc, char** argv) {
                     uint16_t y = event.y;
                     uint8_t p = event.polarity ? 1 : 0;
 
+                    // Rebase the first event to the user-provided microsecond timestamp.
                     eventData.t = static_cast<uint32_t>(
                         t + ((event.ts.toNSec() - first_event_timestamp) / 1000)
                     );

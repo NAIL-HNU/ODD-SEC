@@ -74,6 +74,7 @@ void AngVelEstimator::initialize(image_geometry::PinholeCameraModel* cam,
 
     if (R_matrix.size() == 9) {
         Eigen::Map<const Eigen::Matrix3d> R_raw(R_matrix.data());
+        // ROS arrays are row-major; Eigen maps raw data as column-major.
         R = R_raw.transpose();
     } else {
         ROS_ERROR("Invalid rotation matrix size");
@@ -178,6 +179,7 @@ std::vector<int> AngVelEstimator::motion_compensation_cuda(const std::vector<dvs
         int64_t t0_ns = event_buffer.front().ts.toNSec();
         int threshold = 20;
 
+        // The CUDA path returns one row-major H x W count image.
         run_motion_compensation_cuda(
             event_buffer.data(), event_buffer.size(),
             imu_buffer_.data(), imu_buffer_.size(),
@@ -200,6 +202,7 @@ std::vector<std::vector<int>> AngVelEstimator::motion_compensation(const std::ve
 
         float angular_velocity_x=0.0, angular_velocity_y=0.0,angular_velocity_z=0.0;
         
+        // Average angular velocity over IMU samples within 3 ms before the first event.
         int cnt=0;
         for(int i=0;i<imu_buffer_.size();++i){
                 if(imu_buffer_[i].header.stamp.toNSec() >= (event_buffer[0].ts.toNSec()-3000000)){
@@ -219,6 +222,7 @@ std::vector<std::vector<int>> AngVelEstimator::motion_compensation(const std::ve
         sll t0=event_buffer[0].ts.toNSec();
         #pragma omp parallel for
         for(int i=0;i<event_buffer.size();i++){
+            // Event timestamps are nanoseconds; angular rates are integrated in seconds.
             time_diff = double(event_buffer[i].ts.toNSec()-t0)/1000000000.0;
 
             float x_angular=time_diff*average_angular_rate_x;
@@ -252,6 +256,7 @@ std::vector<std::vector<int>> AngVelEstimator::motion_compensation(const std::ve
 void AngVelEstimator::compute_ts_splitting(const std::vector<dvs_msgs::Event>& event_queue,double decay_sec,ros::Time stamp){
     auto Ts0 = std::chrono::high_resolution_clock::now();
 
+    // Build a ten-channel tensor from ten consecutive event segments.
     const size_t total_events = event_queue.size();
     const size_t segment_size = total_events / 10;
     
@@ -301,6 +306,7 @@ std::vector<std::vector<uint8_t>> AngVelEstimator::AA_thread(
     const double conv_thresh = 0.95;
     const int events_per_check = 10;
 
+    // Forward pass: estimate the final activity reached by every spatial patch.
     for (const auto& e : event_queue) {
         double event_sec = e.ts.toSec();
         if (event_sec >= sync_sec) continue;
@@ -323,6 +329,7 @@ std::vector<std::vector<uint8_t>> AngVelEstimator::AA_thread(
     std::fill(last_event_time.begin(), last_event_time.end(), 0.0);
     std::vector<int> event_count(x_patches_ * y_patches_, 0);
 
+    // Reverse pass: emit pixels until each patch converges to its final activity.
     for (auto it = event_queue.rbegin(); it != event_queue.rend(); ++it) {
         const auto& e = *it;
         double event_sec = e.ts.toSec();
@@ -373,6 +380,7 @@ std::vector<std::vector<uint8_t>> AngVelEstimator::compute_ts(
         cam_height_,
         std::vector<double>(cam_width_, 0.0));
 
+    // Retain the latest event before the synchronization time for every pixel.
     for (const auto& event : event_queue) {
         const double event_sec = event.ts.toSec();
         if (event_sec >= sync_sec) continue;
@@ -387,6 +395,7 @@ std::vector<std::vector<uint8_t>> AngVelEstimator::compute_ts(
         for (int x = 0; x < cam_width_; ++x) {
             if (latest_ts[y][x] > 0) {
                 double dt = sync_sec - latest_ts[y][x];
+                // Exponential time surface, mapped from [0, 1] to mono8.
                 value = std::exp(-dt / decay_sec);
                 representation_ts[y][x] = static_cast<uint8_t>(value * 255.0);
             }
@@ -438,6 +447,7 @@ void AngVelEstimator::publishNewImageData(const std::vector<std::vector<uint8_t>
     msg.count_image.clear();
     msg.count_image.reserve(10 * cam_height_ * cam_width_);
 
+    // Rows from the ten stacked images are flattened in channel-major order.
     for (const auto& row : count_image) {
         for (int element : row) {
             msg.count_image.push_back(element);

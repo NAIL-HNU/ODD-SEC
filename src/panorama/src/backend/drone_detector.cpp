@@ -175,6 +175,7 @@ bool DroneDetector::prepareBuffers() {
         ROS_ERROR("Engine does not have the required 3 I/O tensors.");
         return false;
     }
+    // The exported engine contract is image input, temporal input, then output.
     const char* input_tensor_name = m_engine->getIOTensorName(0);
     const char* sequence_tensor_name = m_engine->getIOTensorName(1);
     const char* output_tensor_name = m_engine->getIOTensorName(2);
@@ -232,6 +233,7 @@ bool DroneDetector::prepareBuffers() {
     if (m_gpu_buffers[0]) cudaFree(m_gpu_buffers[0]);
     if (m_gpu_buffers[1]) cudaFree(m_gpu_buffers[1]);
 
+    // Keep buffer indices aligned with the TensorRT binding order above.
     cudaMalloc(&m_gpu_buffers[0], m_input_buffer_size_elements * sizeof(float));
     cudaMalloc(&m_gpu_buffers[1], m_input_buffer_size_elements * 10 * sizeof(float));
     cudaMalloc(&m_gpu_buffers[2], m_output_buffer_size_elements * sizeof(float));
@@ -261,6 +263,7 @@ void DroneDetector::preprocessImage(const cv::Mat& image, std::vector<float>& in
         return;
     }
 
+    // The image branch is a three-channel CHW float tensor. Values remain in [0, 255].
     if (image.channels() == 1) {
         cv::cvtColor(image, rgb, cv::COLOR_GRAY2BGR);
     } else if (image.channels() == 3) {
@@ -324,6 +327,7 @@ void DroneDetector::prepareSequenceInput(const std::vector<cv::Mat>& sequence_im
 
     sequence_input_host.resize(total_elements);
 
+    // Flatten the temporal tensor as [frame][row][column].
     for (int i = 0; i < num_frames; ++i) {
         const cv::Mat& frame = sequence_images[i];
 
@@ -365,6 +369,7 @@ std::vector<cv::Mat> DroneDetector::createSequenceImages(const std::vector<int>&
         return {};
     }
 
+    // The input vector is channel-major, with each channel stored row-major.
     std::vector<uchar> image_data(count_image.begin(), count_image.end());
 
     std::vector<cv::Mat> sequence_images;
@@ -379,6 +384,7 @@ std::vector<cv::Mat> DroneDetector::createSequenceImages(const std::vector<int>&
 
         cv::Mat channel_mat = channel_mat_header.clone();
 
+        // The vertical model consumes each channel after a 90-degree CCW rotation.
         if (m_enable_rotation) {
             cv::Mat rotated_channel;
             cv::rotate(channel_mat, rotated_channel, cv::ROTATE_90_COUNTERCLOCKWISE);
@@ -411,6 +417,7 @@ std::vector<Detection> DroneDetector::detect(const std::vector<cv::Mat>& sequenc
     std::vector<float> sequence_input_host;
     prepareSequenceInput(sequence_images, sequence_input_host);
 
+    // H2D copies, inference, and D2H copy share one stream and execute in order.
     if (cudaMemcpyAsync(m_gpu_buffers[0], preprocess_input_host.data(),
                         m_input_buffer_size_elements * sizeof(float),
                         cudaMemcpyHostToDevice, m_cuda_stream) != cudaSuccess) {
@@ -459,6 +466,7 @@ std::vector<Detection> DroneDetector::detect(const std::vector<cv::Mat>& sequenc
 
     cudaEventRecord(evt_infer_done, m_cuda_stream);
 
+    // Pinned host memory allows the output copy to remain asynchronous until sync.
     float* output_cpu_pinned = nullptr;
     size_t output_bytes = m_output_buffer_size_elements * sizeof(float);
     cudaError_t err = cudaMallocHost((void**)&output_cpu_pinned, output_bytes);
@@ -540,6 +548,7 @@ std::vector<Detection> DroneDetector::postprocessResults(const float* output, in
     const float MIN_ASPECT_RATIO = 0.2f;
     const float MAX_ASPECT_RATIO = 5.0f;
 
+    // Map boxes from the possibly rotated model input back to the published image.
     float scale_x, scale_y;
     if (m_enable_rotation == true) {
         scale_x = static_cast<float>(original_image_width) / m_cam_height_;
@@ -616,6 +625,7 @@ std::vector<Detection> DroneDetector::doNMS(const std::vector<Detection>& detect
             if (suppressed[j]) {
                 continue;
             }
+            // Suppress overlapping boxes only within the same class.
             if (sorted_detections[i].class_id == sorted_detections[j].class_id) {
                  if (iou(sorted_detections[i].box, sorted_detections[j].box) > iou_thresh) {
                     suppressed[j] = true;
@@ -678,6 +688,7 @@ void DroneDetector::AngleCalculations(float u,float v,ros::Time& t0,ros::Time& s
 
     int x,y;
 
+    // Undo the image rotation before indexing the row-major bearing-vector table.
     if(m_enable_rotation){
         y=(int)u;
         x=m_cam_width_-(int)v;
@@ -697,6 +708,7 @@ void DroneDetector::AngleCalculations(float u,float v,ros::Time& t0,ros::Time& s
     }
     
 
+    // Convert nanoseconds to seconds and compensate a 0.95-revolution-per-second spin.
     float t_diff = double(t0.toNSec() - stamp.toNSec()) / 1000000000.0 * 0.95;
 
     double cos_term = cos(2 * pi * t_diff);
@@ -725,6 +737,7 @@ void DroneDetector::AngleCalculations(float u,float v,ros::Time& t0,ros::Time& s
 
 void DroneDetector::sphericalToCartesian(double r, double theta_rad, double phi_rad, 
     double& x, double& y, double& z) {
+    // theta is azimuth about +z; phi is the polar angle measured from +z.
     x = r * sin(phi_rad) * cos(theta_rad);
     y = r * sin(phi_rad) * sin(theta_rad);
     z = r * cos(phi_rad);

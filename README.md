@@ -117,3 +117,12 @@ If you find this work useful, please cite:
   url           = {https://arxiv.org/abs/2603.06265}
 }
 ```
+
+## Contact
+
+For any questions or inquiries, please contact us at:
+
+- **KuanDai**: daikuan@hnu.edu.cn
+- **HongxinZhang**: zhx_2514@hnu.edu.cn
+
+Or open an issue in this repository.

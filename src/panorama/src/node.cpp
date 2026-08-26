@@ -14,6 +14,8 @@ int main(int argc, char* argv[]) {
     ros::init(argc, argv, "panorama");
     ros::NodeHandle nh;
 
+    // Keep high-rate events and IMU messages on independent callback queues.
+    // Their callbacks may run concurrently and synchronize through Panorama's buffers.
     ros::CallbackQueue imu_queue;
     ros::CallbackQueue events_queue;
 

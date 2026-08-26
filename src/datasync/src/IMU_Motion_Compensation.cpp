@@ -36,6 +36,7 @@ int weight_;
 float Focus_;
 float pixel_size_;
 
+// Offline ROS utility that uses a local IMU window to compensate event motion.
 class EventVisualizer{
         protected:
                  ros::NodeHandle n_;

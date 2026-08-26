@@ -8,6 +8,8 @@ __global__ void find_single_target_kernel(
     float* best_score,
     int* found_detection
 ) {
+    // raw_output is [6300, 6]: [cx, cy, width, height, objectness, class score].
+    // One block reduces all proposals to the highest non-negative score in shared memory.
     __shared__ float s_best_score;
     __shared__ float s_best_box[4];
     __shared__ int s_found;

@@ -36,6 +36,7 @@ public:
             if (ser_.available()) {
                 uint8_t byte;
                 ser_.read(&byte, 1);
+                // Any non-zero byte is high; encode the window majority in Header.frame_id.
                 bool raw_state = (byte > 0);
 
                 state_buffer.push_back(raw_state);

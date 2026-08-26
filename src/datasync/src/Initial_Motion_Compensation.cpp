@@ -37,6 +37,7 @@ int weight_;
 float Focus_;
 float pixel_size_;
 
+// Offline baseline for initial event/IMU motion-compensation experiments.
 class EventVisualizer{
         protected:
                  ros::NodeHandle n_;

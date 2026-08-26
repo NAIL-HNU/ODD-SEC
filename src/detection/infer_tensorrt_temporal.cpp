@@ -112,6 +112,7 @@ int main(int argc, char** argv) {
     IExecutionContext* context = engine->createExecutionContext();
 
     
+    // Engine contract: [1,3,H,W] image, [1,10,H,W] temporal input, then output.
     const char* input1Name = engine->getIOTensorName(0);
     const char* input2Name = engine->getIOTensorName(1);
     const char* outputName = engine->getIOTensorName(2);

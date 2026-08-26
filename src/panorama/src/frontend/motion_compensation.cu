@@ -9,12 +9,14 @@ __global__ void motionCompensationKernel(const dvs_msgs::Event* event_buffer, co
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= event_count) return;
 
+    // One thread warps one event; timestamps are converted from nanoseconds to seconds.
     float time_diff = float(event_timestamps[idx] - t0) / 1e9;
 
     float x_angular = time_diff * avg_angular_velocity_x;
     float y_angular = time_diff * avg_angular_velocity_y;
     float z_angular = time_diff * avg_angular_velocity_z;
 
+    // Perform the angular warp in camera-centered pixel coordinates.
     int x = event_buffer[idx].x - cam_width / 2;
     int y = event_buffer[idx].y - cam_height / 2;
 
@@ -37,6 +39,7 @@ void run_motion_compensation_cuda(const dvs_msgs::Event* h_events, int num_event
                                 float pixel_size, float focus,
                                 int64_t t0,
                                 int* h_count_image, int threshold) {
+    // The host output is a row-major H x W count image.
     dvs_msgs::Event* d_events;
     int64_t* d_event_stamps;
     int* d_count_img;
@@ -81,6 +84,7 @@ void preprocessImuData(const sensor_msgs::Imu* imu_buffer, int imu_count, int64_
 
     int valid_imu_count = 0;
 
+    // Estimate angular velocity from samples no earlier than 3 ms before t0.
     for (int i = 0; i < imu_count; i++){
         if (imu_buffer[i].header.stamp.toNSec() >= (t0 - 3000000)) {
             avg_angular_velocity_x += imu_buffer[i].angular_velocity.x;

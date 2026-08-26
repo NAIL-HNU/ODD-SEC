@@ -47,6 +47,8 @@ sll t0_p;
 
 cv::Size imageSize(panorama_weight_, panorama_height_);
 
+// Offline ROS utility that aligns event packets with IMU data and emits a
+// row-major motion-compensated count image.
 class EventVisualizer {
     protected:
         ros::NodeHandle n_;

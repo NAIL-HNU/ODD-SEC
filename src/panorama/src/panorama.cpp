@@ -146,6 +146,7 @@ void Panorama::precomputeBearingVectors() {
     std::cout << "Camera matrix K:\n" << cam.fullIntrinsicMatrix() << std::endl;
     std::cout << "Distortion coefficients D: " << cam.distortionCoeffs() << std::endl;
 
+    // Cache one rectified camera ray per pixel using row-major indexing.
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             cv::Point2d rectified_point = cam.rectifyPoint(cv::Point2d(x, y));
@@ -165,6 +166,7 @@ void Panorama::cameraInfoCallback(const sensor_msgs::CameraInfo::ConstPtr& camer
         ROS_INFO("Camera info got");
         camera_info_sub_.shutdown();
 
+        // Both processing stages depend on calibration and are initialized only once.
         precomputeBearingVectors();
         ang_vel_estimator_->initialize(&cam, front_end_params_, precomputed_bearing_vectors);
 
@@ -185,6 +187,7 @@ void Panorama::detectionCallback(const panorama::CountImage::ConstPtr& msg) {
 
     ros::Time t0 = msg->init_time;
     ros::Time stamp = msg->header.stamp;
+    // CountImage stores ten row-major H x W channels in channel-major order.
     const std::vector<int>& count_image = msg->count_image;
     int camera_width = cam.fullResolution().width;
     int camera_height = cam.fullResolution().height;
@@ -265,6 +268,7 @@ void Panorama::compensationCallback(const std_msgs::Header::ConstPtr& msg) {
 
     if (first_event_received == false && first_trigger_received==false) {
 
+        // Move a consistent IMU snapshot out of the callback-owned buffer.
         {
             std::lock_guard<std::mutex> lock(imu_buffer_mutex_);
             this->m_local_imu = std::move(this->m_local_imu_raw);
@@ -273,6 +277,7 @@ void Panorama::compensationCallback(const std_msgs::Header::ConstPtr& msg) {
 
         if (this->m_local_imu.empty()) return;
         auto move_start = std::chrono::high_resolution_clock::now();
+        // Append the event snapshot under the event lock, then process it lock-free.
         {
             std::lock_guard<std::mutex> lock(event_buffer_mutex_);
             this->m_event_buffer.insert(
@@ -320,6 +325,7 @@ void Panorama::eventsCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
+    // Uniformly subsample the incoming packet to bound front-end work.
     this->m_event_buffer_raw.reserve(msg->events.size() / front_end_params_.warp_opt.event_sample_rate);
     
     for (auto ev = msg->events.begin(); ev < msg->events.end();
@@ -348,6 +354,7 @@ void Panorama::imuCallback(const sensor_msgs::ImuConstPtr& imu) {
 
     std::lock_guard<std::mutex> lock(this->imu_buffer_mutex_);
     
+    // Collect IMU samples only while an event window is active.
     if (first_event_received == false) {
         this->m_local_imu_raw.emplace_back(*imu);
     }

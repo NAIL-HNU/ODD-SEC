@@ -26,6 +26,7 @@ public:
     Panorama(ros::NodeHandle& events_nh, ros::NodeHandle& imu_nh);  
     ~Panorama();
 
+    // Row-major lookup table: bearing_vectors[y * image_width + x].
     std::vector<cv::Point3d> precomputed_bearing_vectors;
     image_geometry::PinholeCameraModel cam;
     sensor_msgs::CameraInfo camera_info;
@@ -34,6 +35,7 @@ private:
     ros::NodeHandle nh_;
     ros::NodeHandle pnh_;
 
+    // These handles are attached to the independent queues configured in node.cpp.
     ros::NodeHandle events_nh_;
     
     ros::NodeHandle imu_nh_;
@@ -63,12 +65,14 @@ private:
     std::mutex mtx;
     std::mutex data_mutex_;
 
+    // Callbacks append to the raw buffers; processing callbacks consume snapshots below.
     std::vector<dvs_msgs::Event> m_event_buffer_raw; 
     std::vector<sensor_msgs::Imu> m_local_imu_raw;
 
     std::vector<dvs_msgs::Event> m_event_buffer; 
     std::vector<sensor_msgs::Imu> m_local_imu;
 
+    // Each mutex protects a raw buffer and its transfer into a processing snapshot.
     std::mutex event_buffer_mutex_;
     std::mutex imu_buffer_mutex_;
 
