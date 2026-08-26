@@ -15,7 +15,6 @@ data
 *.jpg
 *.csv
 *.png
-# 添加了launch文件
 # ./src/panorama/launch/davis_live.launch
 # ./src/panorama/launch/davis.launch
 

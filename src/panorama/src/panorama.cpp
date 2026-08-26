@@ -11,15 +11,13 @@
 #include <sensor_msgs/NavSatFix.h>
 #include <boost/filesystem.hpp>
 
-
 using namespace std;  
 
 namespace panorama {
 
 Panorama::Panorama(ros::NodeHandle& events_nh, ros::NodeHandle& imu_nh)
-    : events_nh_(events_nh),  // 初始化事件 NodeHandle
-      imu_nh_(imu_nh),        // 初始化 IMU NodeHandle
-    //   compensation_nh_(compensation_nh), Currently only support 1-dimensional array types: int32[][]
+    : events_nh_(events_nh),
+      imu_nh_(imu_nh),
       pnh_("~"), 
       got_camera_info_(false) 
 {
@@ -27,9 +25,9 @@ Panorama::Panorama(ros::NodeHandle& events_nh, ros::NodeHandle& imu_nh)
     const std::string camera_info_topic = pnh_.param<std::string>("camera_info_topic", "/dvs/camera_info");
     const std::string imu_topic = pnh_.param<std::string>("imu_topic", "/dvs/imu");
     const std::string compensation_topic = pnh_.param<std::string>("compensation_topic", "/timestamp_topic");
-    const std::string trigger_topic = pnh_.param<std::string>("/trigger_topic", "/photogate_reader/photogate_state");
-    const std::string GPS_topic = pnh_.param<std::string>("/GPS_topic", "/dvs/ext_trigger");
-    const std::string detection_topic = pnh_.param<std::string>("/detection_topic", "/detection_data");
+    const std::string trigger_topic = pnh_.param<std::string>("trigger_topic", "/photogate_reader/photogate_state");
+    const std::string GPS_topic = pnh_.param<std::string>("GPS_topic", "/dvs/ext_trigger");
+    const std::string detection_topic = pnh_.param<std::string>("detection_topic", "/detection_data");
 
     LOG(INFO) << "Event topic: " << events_topic;
     LOG(INFO) << "Camera info topic: " << camera_info_topic;
@@ -66,11 +64,12 @@ Panorama::Panorama(ros::NodeHandle& events_nh, ros::NodeHandle& imu_nh)
     back_end_params_.det_opt.nms_thresh = pnh_.param<float>("nms_thresh", 1);
     back_end_params_.det_opt.enable_rotation = pnh_.param<bool>("enable_rotation", false);
     back_end_params_.file_opt.bag_file_path = pnh_.param<std::string>("bag_file", "2025-08-17-18-56-42.bag");
+    back_end_params_.file_opt.output_dir = pnh_.param<std::string>("output_dir", ".");
     
 
     m_threshold = pnh_.param<int>("threshold", 1);
 
-    std::vector<double> default_R_matrix = {1, 0, 0, 0, 1, 0, 0, 0, 1}; // 默认单位矩阵
+    std::vector<double> default_R_matrix = {1, 0, 0, 0, 1, 0, 0, 0, 1};
 
     if (!pnh_.getParam("R_matrix", front_end_params_.image_opt.R_matrix)) {
         front_end_params_.image_opt.R_matrix = default_R_matrix;
@@ -88,26 +87,21 @@ Panorama::Panorama(ros::NodeHandle& events_nh, ros::NodeHandle& imu_nh)
         ROS_ERROR("Invalid R_matrix size, using identity matrix");
     }
 
-    // 提取纯文件名(不带路径和扩展名)
     bag_file_path=back_end_params_.file_opt.bag_file_path;
     boost::filesystem::path path_obj(bag_file_path);
     std::string bag_filename = path_obj.stem().string();
     std::cout << "bag_filename : " << bag_filename << std::endl;
 
-    
-    // 构建输出文件路径
-    output_path = "/home/zhx/codes/2_Drone_Dection/Dataset_Toolbox/src/panorama/data/" + 
-                             bag_filename + "_panorama_output.txt";
-    time_path = "/home/zhx/codes/2_Drone_Dection/Dataset_Toolbox/src/panorama/data/" + 
-                             bag_filename + "_time_cosume.txt";
+    const boost::filesystem::path output_dir(back_end_params_.file_opt.output_dir);
+    boost::system::error_code error;
+    boost::filesystem::create_directories(output_dir, error);
+    if (error) {
+        ROS_WARN("Failed to create output directory '%s': %s",
+                 output_dir.string().c_str(), error.message().c_str());
+    }
+    output_path = (output_dir / (bag_filename + "_panorama_output.txt")).string();
+    time_path = (output_dir / (bag_filename + "_time_consume.txt")).string();
     m_time_norm = std::chrono::high_resolution_clock::now();
-
-    // std::vector<double> R_matrix = front_end_params_.image_opt.R_matrix;
-    // std::cout << "R_matrix: ";
-    // for (const auto& val : R_matrix) {
-    //     std::cout << val << " ";  // 逐个打印元素
-    // }
-    // std::cout << std::endl;
 
     back_end_params_.image_opt.panorama_height = pnh_.param<int>("panorama_height", 1);
     back_end_params_.image_opt.panorama_width = pnh_.param<int>("panorama_width", 1);
@@ -117,17 +111,10 @@ Panorama::Panorama(ros::NodeHandle& events_nh, ros::NodeHandle& imu_nh)
     int panorama_height_ = front_end_params_.image_opt.panorama_height;
     int panorama_width_ = front_end_params_.image_opt.panorama_width;
 
-
-    // New a angular velocity estimator (the front-end runs in the main thread)
     ang_vel_estimator_ = new AngVelEstimator(&nh_);
 
-    // New a pose graph optimizer
-    // pose_graph_optimizer_ = new PoseGraphOptimizer(&nh_);
-
-    //TODO 提供这里的变量
     drone_detector_ = new DroneDetector(&nh_);
 
-    // Set the pointer to each other
     ang_vel_estimator_->setBackend(drone_detector_);
     drone_detector_->setFrontend(ang_vel_estimator_);
 }
@@ -144,21 +131,20 @@ Panorama::~Panorama() {
     }
     camera_info_sub_.shutdown();
     event_sub_.shutdown();
-    imu_sub_.shutdown(); // 如果启用了 IMU 订阅
+    imu_sub_.shutdown();
 }
 
-// 预计算每个像素的3D射线方向（共享给前后端）
 void Panorama::precomputeBearingVectors() {
 
     const int width = cam.fullResolution().width;
     const int height = cam.fullResolution().height;
 
     if (!cam.initialized()) {
-        std::cerr << "相机模型未初始化！" << std::endl;
+        std::cerr << "Camera model is not initialized." << std::endl;
     }
 
-    std::cout << "相机内参 K:\n" << cam.fullIntrinsicMatrix() << std::endl;
-    std::cout << "畸变系数 D: " << cam.distortionCoeffs() << std::endl; 
+    std::cout << "Camera matrix K:\n" << cam.fullIntrinsicMatrix() << std::endl;
+    std::cout << "Distortion coefficients D: " << cam.distortionCoeffs() << std::endl;
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
@@ -169,7 +155,6 @@ void Panorama::precomputeBearingVectors() {
     }
 }
 
-// 相机内参回调（仅调用一次）
 void Panorama::cameraInfoCallback(const sensor_msgs::CameraInfo::ConstPtr& camera_info) {
 
     if (!got_camera_info_) {
@@ -177,22 +162,18 @@ void Panorama::cameraInfoCallback(const sensor_msgs::CameraInfo::ConstPtr& camer
         cam.fromCameraInfo(camera_info);
         got_camera_info_ = true;
 
-
         ROS_INFO("Camera info got");
         camera_info_sub_.shutdown();
 
-        // Initialze the front-end
         precomputeBearingVectors();
-        ang_vel_estimator_->initialize(&cam, front_end_params_, precomputed_bearing_vectors);//相机参数，前端参数，预计算投影
+        ang_vel_estimator_->initialize(&cam, front_end_params_, precomputed_bearing_vectors);
 
-        // Intialize the back-end
         int camera_width = cam.fullResolution().width;
         int camera_height = cam.fullResolution().height;
         drone_detector_->initialize(camera_width, camera_height,
                                           back_end_params_,
                                           &precomputed_bearing_vectors);
         
-        // Initial parameter
         m_image_to_detect.create(camera_height, camera_width, CV_8UC1);
         ROS_INFO("System initialized with camera info");
     }
@@ -202,39 +183,32 @@ void Panorama::cameraInfoCallback(const sensor_msgs::CameraInfo::ConstPtr& camer
 void Panorama::detectionCallback(const panorama::CountImage::ConstPtr& msg) {
     auto callback_start = std::chrono::high_resolution_clock::now();
 
-    ros::Time t0 = msg->init_time;       // 初始时间
-    ros::Time stamp = msg->header.stamp;  // 消息时间戳
+    ros::Time t0 = msg->init_time;
+    ros::Time stamp = msg->header.stamp;
     const std::vector<int>& count_image = msg->count_image;
     int camera_width = cam.fullResolution().width;
     int camera_height = cam.fullResolution().height;
-    const int num_channels = 10;  // 10通道数据
+    const int num_channels = 10;
 
-    // 检查数据大小是否匹配
     if (count_image.size() != camera_width * camera_height * num_channels) {
         ROS_ERROR("Received count_image size (%lu) doesn't match expected size (%d x %d x %d)",
                  count_image.size(), camera_width, camera_height, num_channels);
         return;
     }
 
-    // 计算 createSequenceImages 的耗时
     auto start_time = std::chrono::high_resolution_clock::now();
-    // 创建10帧图像序列（调用封装函数）
     std::vector<cv::Mat> sequence_images = drone_detector_->createSequenceImages(count_image, camera_width, camera_height, num_channels);
     auto end_time = std::chrono::high_resolution_clock::now();
     double elapsed_ms = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count() / 1000.0;
 
-    // 使用第一帧作为显示图像
     cv::Mat display_img = sequence_images[0].clone();
 
-    // 执行检测
     std::vector<Detection> dets = drone_detector_->detect(sequence_images, time_path, t0);
 
     auto img_start_time = std::chrono::high_resolution_clock::now();
-    // 显示结果
     drone_detector_->show_count_image(display_img, dets, t0);
     auto img_end_time = std::chrono::high_resolution_clock::now();
     double countimg_ms = std::chrono::duration_cast<std::chrono::microseconds>(img_end_time - img_start_time).count() / 1000.0;
-    // 发布角度信息
     if (!dets.empty()) {
         for (const auto& d : dets) {
             auto angle_start = std::chrono::high_resolution_clock::now();
@@ -248,10 +222,6 @@ void Panorama::detectionCallback(const panorama::CountImage::ConstPtr& msg) {
             outFile << "[ " << t0 << " ] bearing vector computing " << angle_elapsed_ms << std::endl;
             outFile.close();
             
-            // 打印变量信息
-            // ROS_INFO("Detection: centerX=%.2f, centerY=%.2f, t0=%.9f, stamp=%.9f, box(x=%d, y=%d, w=%d, h=%d), conf=%.3f",
-            //         centerX, centerY, t0.toSec(), stamp.toSec(),
-            //         d.box.x, d.box.y, d.box.width, d.box.height, d.score);
         }
     }
     auto final_time = std::chrono::high_resolution_clock::now();
@@ -272,30 +242,18 @@ void Panorama::detectionCallback(const panorama::CountImage::ConstPtr& msg) {
 }
 
 void Panorama::triggerCallback(const geometry_msgs::PointStamped::ConstPtr& msg) {
-    stamp = msg->header.stamp;  // 获取时间戳
+    stamp = msg->header.stamp;
     first_trigger_received = false;
 }
 
-// void Panorama::triggerCallback(const std_msgs::Header::ConstPtr& msg) {
-
-//     stamp =msg->stamp;  // 获取时间戳
-//     first_trigger_received=false;
-// }
-
 void Panorama::GPSCallback(const geometry_msgs::PointStamped::ConstPtr& msg) {
-    GPS_stamp = msg->header.stamp;  // 获取时间戳
-        // 打开文件
-    // std::cout << "GPS_stamp : " << GPS_stamp << std::endl;
+    GPS_stamp = msg->header.stamp;
     std::ofstream outFile(output_path, std::ios::app);
-    // std::ofstream outFile("/home/zhx/codes/2_Drone_Dection/Dataset_Toolbox/src/panorama/data/panorama_output.txt", std::ios::app);
     outFile << "\n-----------------------------------" << std::endl;
     outFile << "[ GT  ] Timestamp: " << GPS_stamp.toNSec() << std::endl;
     outFile.close();
 }
 
-    // auto callback_start = std::chrono::high_resolution_clock::now();
-    // auto callback_end = std::chrono::high_resolution_clock::now();
-    // double compute_callback_ms = std::chrono::duration_cast<std::chrono::microseconds>(callback_end - callback_start).count() / 1000.0;
 void Panorama::compensationCallback(const std_msgs::Header::ConstPtr& msg) {
     
     ros::Time stamp_ =stamp;
@@ -305,22 +263,16 @@ void Panorama::compensationCallback(const std_msgs::Header::ConstPtr& msg) {
         return;
     }
 
-    // 
     if (first_event_received == false && first_trigger_received==false) {
-        // auto Ts0 = std::chrono::high_resolution_clock::now();
-        // std::cout << "panorama::local_imu size : " << panorama::local_imu.size() << std::endl;
 
-        // Load IMU data from raw buffer
         {
             std::lock_guard<std::mutex> lock(imu_buffer_mutex_);
-            this->m_local_imu = std::move(this->m_local_imu_raw);  // 转移所有权，避免拷贝
+            this->m_local_imu = std::move(this->m_local_imu_raw);
             this->m_local_imu_raw.clear();
         }
 
-        // if (imu_buffer_.size_approx() == 0) return;
         if (this->m_local_imu.empty()) return;
         auto move_start = std::chrono::high_resolution_clock::now();
-        // Load Event data from raw buffer
         {
             std::lock_guard<std::mutex> lock(event_buffer_mutex_);
             this->m_event_buffer.insert(
@@ -332,7 +284,6 @@ void Panorama::compensationCallback(const std_msgs::Header::ConstPtr& msg) {
         }
         auto move_end = std::chrono::high_resolution_clock::now();
         ros::Time t0=this->m_event_buffer[0].ts;
-        // ros::Time external_sync_time=this->m_event_buffer.back().ts;
 
         double decay_sec=front_end_params_.AA_opt.decay_sec;
 
@@ -343,11 +294,6 @@ void Panorama::compensationCallback(const std_msgs::Header::ConstPtr& msg) {
         double move_elapsed_ms = std::chrono::duration_cast<std::chrono::microseconds>(move_end - move_start).count() / 1000.0;
         double compute_elapsed_ms = std::chrono::duration_cast<std::chrono::microseconds>(compute_end - compute_start).count() / 1000.0;
 
-
-        // auto [avg_x, avg_y, avg_z] = ang_vel_estimator_->IMU_Average(m_local_imu);
-        // auto Ts1 = std::chrono::high_resolution_clock::now();
-        // std::cout << "imu average:"<< avg_x << " " << avg_y << " " << avg_z << std::endl;
-        // std::cout << "compensationCallback Ts1 - Ts0 " << std::chrono::duration_cast<std::chrono::microseconds>(Ts1 - Ts0).count() / 1000.0 << " ms" << std::endl;
         
         this->m_event_buffer.clear();
         this->m_local_imu.clear();
@@ -359,21 +305,16 @@ void Panorama::compensationCallback(const std_msgs::Header::ConstPtr& msg) {
         outFile << "[ " << t0 << " ] front-end time: " << front_end << std::endl;
         outFile.close();
 
-
     } else {
-        //TODO 这里是否可以清空 event_buffer?
         first_event_received = false;
         std::lock_guard<std::mutex> lock(this->imu_buffer_mutex_);
-        // clearImuQueue(imu_buffer);
         this->m_local_imu_raw.clear();
    
     }
 }
 
-// Loda raw event data
 void Panorama::eventsCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
     auto callback_start = std::chrono::high_resolution_clock::now();
-
 
     std::lock_guard<std::mutex> lock(this->event_buffer_mutex_);
 
@@ -403,35 +344,13 @@ void Panorama::eventsCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
 
 }
 
-// Load raw IMU data
 void Panorama::imuCallback(const sensor_msgs::ImuConstPtr& imu) {
 
-    // static auto last_time = std::chrono::high_resolution_clock::now();
-    // auto now = std::chrono::high_resolution_clock::now();
-    // count_+=std::chrono::duration_cast<std::chrono::microseconds>(now - last_time).count() / 1000.0;
-    // c_++;
-    // double avg = count_ / c_;
-
-    // std::cout << "imuCallback times: " 
-    //         << c_
-    //         << std::endl;    
-
-    // std::cout << "imuCallback avg interval: " 
-    //         << avg
-    //         << " ms" << std::endl;
-
-    // std::cout << "imuCallback interval: " 
-    //         << std::chrono::duration_cast<std::chrono::microseconds>(now - last_time).count() / 1000.0 
-    //         << " ms" << std::endl;
-
-    // last_time = now;
-
-    // 必须加锁：保护 imu_buffer 的写入
-    std::lock_guard<std::mutex> lock(this->imu_buffer_mutex_);  // 使用与 eventsCallback 相同的互斥量
+    std::lock_guard<std::mutex> lock(this->imu_buffer_mutex_);
     
     if (first_event_received == false) {
         this->m_local_imu_raw.emplace_back(*imu);
     }
 }
 
-} // namespace panorama
+}

@@ -1,8 +1,7 @@
 #include "backend/drone_detector.h"
 #include <fstream>
-#include <algorithm> // For std::sort
-#include <cmath>     // For expf
-
+#include <algorithm>
+#include <cmath>
 
 namespace panorama {
 DroneDetector::DroneDetector(ros::NodeHandle* nh)
@@ -50,7 +49,6 @@ DroneDetector::~DroneDetector() {
 void DroneDetector::initialize(int camera_width, int camera_height,
     const DetectorParams &opt,
     std::vector<cv::Point3d>* precomputed_bearing_vectors_ptr){
-// Load params
     m_params = opt;
 
     m_cam_width_ = camera_width;
@@ -67,7 +65,7 @@ void DroneDetector::initialize(int camera_width, int camera_height,
 
     if (R_matrix.size() == 9) {
         Eigen::Map<const Eigen::Matrix3d> R_raw(R_matrix.data());
-        m_R = R_raw.transpose();  // ROS数组是行优先，需转置为列优先
+        m_R = R_raw.transpose();
     } else {
         ROS_ERROR("Invalid rotation matrix size");
         m_R = Eigen::Matrix3d::Identity();
@@ -94,12 +92,8 @@ void DroneDetector::initialize(int camera_width, int camera_height,
     m_initialized = true;
     LOG_INFO("DroneDetector initialized successfully!");
 
-// count_pano = cv::Mat::zeros(panorama_height_, panorama_width_, CV_32F); 
-
 }
 
-
-// Loading engine
 bool DroneDetector::loadEngine(const std::string& engine_file_path) {
     std::ifstream engine_file(engine_file_path, std::ios::binary | std::ios::ate);
     if (!engine_file) {
@@ -121,12 +115,11 @@ bool DroneDetector::loadEngine(const std::string& engine_file_path) {
     return true;
 }
 
-// Prepare GPU buffer for the following propressing
 bool DroneDetector::prepareBuffers() {
     if (!m_engine) return false;
 
-    m_input_binding_index = m_engine->getBindingIndex(m_engine->getIOTensorName(0)); // 假设第一个I/O张量是输入
-    m_output_binding_index = m_engine->getBindingIndex(m_engine->getIOTensorName(1)); // 假设第二个I/O张量是输出
+    m_input_binding_index = m_engine->getBindingIndex(m_engine->getIOTensorName(0));
+    m_output_binding_index = m_engine->getBindingIndex(m_engine->getIOTensorName(1));
 
     if (m_input_binding_index < 0 || m_output_binding_index < 0) {
         LOG_ERROR("Failed to get valid binding indices. Input: %d, Output: %d", m_input_binding_index, m_output_binding_index);
@@ -148,8 +141,7 @@ bool DroneDetector::prepareBuffers() {
     }
     m_input_dims = batch_input_dims;
 
-    // compute size of Buffer (input and output)
-    m_input_buffer_size_elements = 1; // batch size
+    m_input_buffer_size_elements = 1;
     for (int j = 1; j < m_input_dims.nbDims; ++j) {
         m_input_buffer_size_elements *= m_input_dims.d[j];
     }
@@ -159,18 +151,15 @@ bool DroneDetector::prepareBuffers() {
         m_output_buffer_size_elements *= m_output_dims.d[j];
     }
 
-    // Malloc CUDA memory
-    cudaMalloc(&m_gpu_buffers[0], m_input_buffer_size_elements * sizeof(float));   // input buffer
-    cudaMalloc(&m_gpu_buffers[1], m_output_buffer_size_elements * sizeof(float)); // output buffer
+    cudaMalloc(&m_gpu_buffers[0], m_input_buffer_size_elements * sizeof(float));
+    cudaMalloc(&m_gpu_buffers[1], m_output_buffer_size_elements * sizeof(float));
 
-    // Binding context
     m_context->setTensorAddress(m_engine->getBindingName(m_input_binding_index), m_gpu_buffers[0]);
     m_context->setTensorAddress(m_engine->getBindingName(m_output_binding_index), m_gpu_buffers[1]);
 
     return true;
 }
 
-// Preprocessing images
 void DroneDetector::preprocessImage(const cv::Mat& image, std::vector<float>& input_buffer) {
     cv::Mat rgb, resized;
 
@@ -178,7 +167,6 @@ void DroneDetector::preprocessImage(const cv::Mat& image, std::vector<float>& in
     cv::resize(rgb, resized, cv::Size(m_cam_width_, m_cam_height_));
     resized.convertTo(resized, CV_32F);
 
-    // HWC -> CHW
     std::vector<float> input(m_input_c * m_cam_height_ * m_cam_width_);
     std::vector<cv::Mat> channels(m_input_c);
     cv::split(resized, channels);
@@ -190,7 +178,6 @@ void DroneDetector::preprocessImage(const cv::Mat& image, std::vector<float>& in
     }
 }
 
-// Main detector
 std::vector<Detection> DroneDetector::detect(const cv::Mat& image) {
     if (!m_initialized || image.empty()) {
         LOG_ERROR("Detector not initialized or empty image provided.");
@@ -200,7 +187,6 @@ std::vector<Detection> DroneDetector::detect(const cv::Mat& image) {
     std::vector<float> preprocess_input;
     preprocessImage(image, preprocess_input);
 
-    // Copy preprocessed data to GPU
     if (cudaMemcpyAsync(m_gpu_buffers[0], preprocess_input.data(),
                         m_input_buffer_size_elements * sizeof(float),
                         cudaMemcpyHostToDevice, m_cuda_stream) != cudaSuccess) {
@@ -208,13 +194,11 @@ std::vector<Detection> DroneDetector::detect(const cv::Mat& image) {
         return {};
     }
 
-    // Inference    //TODO Will it work well?
     if (!m_context->enqueueV3(m_cuda_stream)) {
         LOG_ERROR("Failed to execute inference.");
         return {};
     }
 
-    // Copy Data back to CPU 
     std::vector<float> output_cpu_buffer(m_output_buffer_size_elements);
     if (cudaMemcpyAsync(output_cpu_buffer.data(), m_gpu_buffers[1],
                         m_output_buffer_size_elements * sizeof(float),
@@ -223,7 +207,6 @@ std::vector<Detection> DroneDetector::detect(const cv::Mat& image) {
         return {};
     }
 
-    // Synchronize CUDA Stream
     cudaStreamSynchronize(m_cuda_stream);
 
     return postprocessResults(output_cpu_buffer.data(), image.cols, image.rows);
@@ -254,14 +237,12 @@ std::vector<Detection> DroneDetector::postprocessResults(const float* output, in
     return finalDets;
 }
 
-// Compute IoU
 float DroneDetector::iou(const cv::Rect& a, const cv::Rect& b) {
     float inter_area = static_cast<float>((a & b).area());
     float union_area = static_cast<float>(a.area() + b.area() - inter_area);
     return (union_area > 0) ? (inter_area / union_area) : 0.0f;
 }
 
-// NMS
 std::vector<Detection> DroneDetector::doNMS(const std::vector<Detection>& detections, float iou_thresh) {
     if (detections.empty()) {
         return {};
@@ -284,7 +265,6 @@ std::vector<Detection> DroneDetector::doNMS(const std::vector<Detection>& detect
             if (suppressed[j]) {
                 continue;
             }
-            // 仅对相同类别的进行NMS (如果你的模型有多类别且希望分别NMS)
             if (sorted_detections[i].class_id == sorted_detections[j].class_id) {
                  if (iou(sorted_detections[i].box, sorted_detections[j].box) > iou_thresh) {
                     suppressed[j] = true;
@@ -296,13 +276,10 @@ std::vector<Detection> DroneDetector::doNMS(const std::vector<Detection>& detect
 }
 
 void DroneDetector::show_count_image(cv::Mat& count_image, const std::vector<Detection>& detections) {
-    // Create image
     cv::Mat image;
     cv::cvtColor(count_image, image, cv::COLOR_GRAY2BGR);
 
-
     if (!detections.empty()) {
-        // Drone detected in the image scene, add rectangle to image and process 
         for (auto& d: detections) {
             cv::rectangle(image, d.box, cv::Scalar(0, 255, 0), 2);
             char buf[32];
@@ -311,18 +288,13 @@ void DroneDetector::show_count_image(cv::Mat& count_image, const std::vector<Det
         }
     }
 
-    // Create ROS message head with timestamp
     std_msgs::Header header;
-    // header.stamp = timestamp;
 
-    // Transform OpenCV image to ROS image message
     sensor_msgs::ImagePtr msg = cv_bridge::CvImage(header, "bgr8", image).toImageMsg();
 
-    // Publish
     m_count_image_pub_.publish(msg);
 
 }
-
 
 void DroneDetector::AngleCalculations(float x,float y,ros::Time& t0,ros::Time& stamp)
 {
@@ -353,8 +325,6 @@ void DroneDetector::AngleCalculations(float x,float y,ros::Time& t0,ros::Time& s
 
 }
 
-
-// 球坐标转笛卡尔坐标
 void DroneDetector::sphericalToCartesian(double r, double theta_rad, double phi_rad, 
                          double& x, double& y, double& z) {
     x = r * sin(phi_rad) * cos(theta_rad);
@@ -362,15 +332,12 @@ void DroneDetector::sphericalToCartesian(double r, double theta_rad, double phi_
     z = r * cos(phi_rad);
 }
 
-// 计算并发布Marker消息的函数
 void DroneDetector::publishSphericalMarker(ros::Publisher& pub, 
                           double r, double theta_rad, double phi_rad, 
                           const std::string& frame_id ) {
-    // 计算终点笛卡尔坐标
     double x_end, y_end, z_end;
     sphericalToCartesian(r, theta_rad, phi_rad, x_end, y_end, z_end);
 
-    // 1. 创建直线Marker
     visualization_msgs::Marker line_marker;
     line_marker.header.frame_id = frame_id;
     line_marker.header.stamp = ros::Time::now();
@@ -378,18 +345,16 @@ void DroneDetector::publishSphericalMarker(ros::Publisher& pub,
     line_marker.id = 0;
     line_marker.type = visualization_msgs::Marker::LINE_STRIP;
     line_marker.action = visualization_msgs::Marker::ADD;
-    line_marker.scale.x = 0.05; // 线宽
-    line_marker.color.b = 1.0;  // 蓝色
-    line_marker.color.a = 1.0;  // 不透明度
+    line_marker.scale.x = 0.05;
+    line_marker.color.b = 1.0;
+    line_marker.color.a = 1.0;
 
-    // 设置起点和终点（LINE_STRIP通过points定义方向，无需orientation）
     geometry_msgs::Point start_point, end_point;
     start_point.x = 0; start_point.y = 0; start_point.z = 0;
     end_point.x = x_end; end_point.y = y_end; end_point.z = z_end;
     line_marker.points.push_back(start_point);
     line_marker.points.push_back(end_point);
 
-    // 2. 创建文本Marker
     visualization_msgs::Marker text_marker;
     text_marker.header = line_marker.header;
     text_marker.ns = "polar_text_3d";
@@ -407,9 +372,8 @@ void DroneDetector::publishSphericalMarker(ros::Publisher& pub,
     ", θ=" + std::to_string(theta_deg).substr(0, 2) + "°" +
     ", φ=" + std::to_string(phi_deg).substr(0, 2) + "°";
 
-    // 关键修复：初始化文本的位姿（位置+方向）
     text_marker.pose.position = end_point;
-    text_marker.pose.orientation.x = 0.0;  // 单位四元数
+    text_marker.pose.orientation.x = 0.0;
     text_marker.pose.orientation.y = 0.0;
     text_marker.pose.orientation.z = 0.0;
     text_marker.pose.orientation.w = 1.0;
@@ -419,24 +383,8 @@ void DroneDetector::publishSphericalMarker(ros::Publisher& pub,
     text_marker.color.g = 1.0;
     text_marker.color.a = 1.0;
 
-    // 发布Markers
     pub.publish(line_marker);
     pub.publish(text_marker);
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 }

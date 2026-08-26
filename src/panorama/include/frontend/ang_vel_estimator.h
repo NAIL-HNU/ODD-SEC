@@ -18,10 +18,8 @@
 
 #include <dvs_msgs/Event.h>
 #include <dvs_msgs/EventArray.h>
-// #include <dvs_msgs/CountImage.h>
 #include <panorama/CountImage.h>
 #include <tuple>
-
 
 namespace panorama {
 
@@ -30,10 +28,8 @@ class DroneDetector;
 
 class AngVelEstimator {
 public:
-    // Constructor
     AngVelEstimator(ros::NodeHandle* nh);
 
-    // Deconstructor
     ~AngVelEstimator();
     
 
@@ -44,10 +40,8 @@ public:
     
     void setBackend(DroneDetector* ptr) { drone_detector_ = ptr; }
     bool processEvent(const dvs_msgs::Event& ev);
-    //IMU
     std::vector<std::vector<int>> motion_compensation(const std::vector<dvs_msgs::Event>& event_buffer,const std::vector<sensor_msgs::Imu>& imu_buffer_, int threshold);
     std::vector<int> motion_compensation_cuda(const std::vector<dvs_msgs::Event>& event_buffer,const std::vector<sensor_msgs::Imu>& imu_buffer_);
-    // bool motion_compensation(const std::vector<dvs_msgs::Event>& event_buffer);
 
     void publishCountImageData(const std::vector<std::vector<int>>& count_image,ros::Time& t0, ros::Time& stamp);
     void publishCountImageData_cuda(const std::vector<int>& count_image, ros::Time& t0, ros::Time& stamp);
@@ -74,13 +68,10 @@ public:
     
 
 private:
-    // Pointer to the ROS node, for publishing
     ros::NodeHandle* nh_;
     ros::NodeHandle nh;
     image_transport::ImageTransport it_;
     image_transport::Publisher pano_pub_;
-
-    // image_transport::Publisher image_pub;
 
     ros::Publisher pub_signal,detection_pub,imu_pub,image_pub;
 
@@ -102,11 +93,9 @@ private:
 
     std::vector<cv::Point3d> precomputed_bearing_vectors_;
 
-    // std::vector<dvs_msgs::Event> event_buffer;
     std::vector<sensor_msgs::Imu> imu_buffer_;
     std::vector<dvs_msgs::Event> local_events;
     std::vector<dvs_msgs::Event> segments;
-    // std::vector<sensor_msgs::Imu> local_imu;
 
     std::vector<std::vector<int>> count_image;
     std::vector<int> flat_count_image;
@@ -133,18 +122,10 @@ private:
     std::mutex data_mutex_;
     
 
-
-
-    //调试区
     std::chrono::high_resolution_clock::time_point T1;
     std::chrono::high_resolution_clock::time_point T2{};
     bool START;
 
-    // Event Representation
-    // std::vector<std::vector<uint8_t>> m_representation_event_;
-    // std::vector<std::vector<double>> m_latest_ts_;
-
-
 };
 
-} // namespace panorama
+}

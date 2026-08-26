@@ -1,18 +1,15 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-# 检查是否提供了文件名参数
-if [ -z "$1" ]; then
-  echo "请提供文件名作为参数，例如：./run_rosbag.sh 2025-03-16-14-57-35"
+if [[ $# -ne 2 ]]; then
+  echo "Usage: $0 <input.bag> <output-prefix>" >&2
   exit 1
 fi
 
-# 设置文件名变量
-FILENAME="$1"
-
-# 打开一个新终端并执行命令
-
-gnome-terminal -- bash -c "cd ~/dataset/Added/low_light; rosbag record /count_image -O ${FILENAME}_image.bag; exec bash"
-
-# gnome-terminal -- bash -c "cd ~/dataset/Added/low_light; rosbag record /event_new -O ${FILENAME}_event.bag; exec bash"
+input_bag="$1"
+output_prefix="$2"
+rosbag record /count_image -O "${output_prefix}_image.bag" &
+record_pid=$!
+trap 'kill "${record_pid}" 2>/dev/null || true' EXIT
 sleep 1
-gnome-terminal -- bash -c " rosbag play -r 0.1 ${FILENAME}.bag; exec bash"
+rosbag play -r 0.1 "${input_bag}"

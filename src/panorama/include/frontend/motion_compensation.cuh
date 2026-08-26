@@ -16,14 +16,12 @@
 #include <cmath>
 #include <iostream>
 
-// CUDA 核函数声明
 __global__ void motionCompensationKernel(const dvs_msgs::Event* event_buffer, int* count_image,
                                     const sensor_msgs::Imu* imu_buffer, int imu_count,
                                     int event_count, int cam_width, int cam_height,
                                     float pixel_focus_ratio, float Focus, float pixel_size,
                                     int64_t t0, int threshold);
 
-// CUDA 加速函数接口
 void run_motion_compensation_cuda(const dvs_msgs::Event* h_events, int num_events,
                                     const sensor_msgs::Imu* h_imu_buffer, int num_imu,
                                     int cam_width, int cam_height,
@@ -36,4 +34,4 @@ void preprocessImuData(const sensor_msgs::Imu* imu_buffer, int imu_count, int64_
 
 void preprocessEventTimestamps(const dvs_msgs::Event* h_events, int num_events, int64_t* event_timestamps);
 
-#endif // MOTION_COMPENSATION_CUH
+#endif

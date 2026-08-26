@@ -1,4 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-# 打开一个新终端并执行命令
-gnome-terminal -- bash -c "cd /home/dai/workspace/Dataset_Toolbox; source devel/setup.bash;sleep 1; roslaunch datasync Motion_Compensation_Event.launch; exec bash"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+workspace_root="$(cd -- "${script_dir}/../.." && pwd)"
+if [[ -f "${workspace_root}/devel/setup.bash" ]]; then
+  source "${workspace_root}/devel/setup.bash"
+fi
+
+exec roslaunch datasync Motion_Compensation_Event.launch

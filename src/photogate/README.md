@@ -1,13 +1,9 @@
-> 这部分代码用于接收来自USB的光电门开关信号
+This package reads a photogate signal from a USB serial device.
 
-## 准备工作
+Find the serial device: `ls /dev/ttyUSB*`
 
-查看USB设备：`ls /dev/ttyUSB*`
+Grant access: `sudo chmod 666 /dev/ttyUSB0`
 
-设置权限：`sudo chmod 666 /dev/ttyUSB0`
+Run: `roslaunch photogate_reader photo_gate.launch`
 
-## 运行
-
-运行命令： `roslaunch photogate_reader photo_gate.launch`
-
-光电门开关的Topic：`/photogate_reader/photogate_state`
+Topic: `/photogate_reader/photogate_state`

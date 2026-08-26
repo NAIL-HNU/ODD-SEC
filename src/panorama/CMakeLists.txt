@@ -21,21 +21,22 @@ find_package(catkin REQUIRED COMPONENTS
   message_generation
 )
 find_package(CUDA REQUIRED)
+find_package(Eigen3 REQUIRED)
 find_package(OpenMP REQUIRED)
 find_package(OpenCV REQUIRED)
-# find_package(OpenCL)
-# find_package(PCL)
+find_path(TENSORRT_INCLUDE_DIR NvInfer.h)
+find_library(TENSORRT_LIBRARY nvinfer)
 
-# search for all msg files
+if(NOT TENSORRT_INCLUDE_DIR OR NOT TENSORRT_LIBRARY)
+  message(FATAL_ERROR "TensorRT headers and libraries were not found")
+endif()
+
 FILE(GLOB messages_to_build RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/msg"
     "${CMAKE_CURRENT_SOURCE_DIR}/msg/*.msg")
 
-    
-# message(WARNING "Found .msg files: ${messages_to_build}")
-
 add_message_files(
     FILES
-    ${messages_to_build}  # 确保这里使用的是上面 FILE(GLOB) 设置的变量
+    ${messages_to_build}
 )
 
 generate_messages(
@@ -47,41 +48,17 @@ catkin_package(
   CATKIN_DEPENDS message_runtime std_msgs
 )
 
-include_directories(/usr/include/eigen3)
-include_directories(${OpenCV_INCLUDE_DIRS})
-
-# Add CUDA include directories (adjust if necessary)
-include_directories(/usr/local/cuda/include) # Default CUDA include path
-include_directories(/usr/src/tensorrt/include) # Default TensorRT include path, adjust if your version/path is different
-
-# Add CUDA library directories (adjust if necessary)
-link_directories(/usr/local/cuda/lib64) # Default CUDA library path
-link_directories(/usr/lib/aarch64-linux-gnu) # Common location for TensorRT libraries on Jetson
-link_directories(/usr/src/tensorrt/lib) # Default TensorRT library path, adjust if your version/path is different
-
-# catkin_package(
-#  INCLUDE_DIRS include
-#  LIBRARIES panorama
-#  CATKIN_DEPENDS roscpp rospy std_msgs
-#  DEPENDS system_lib
-# )
-# if (NOT OPENCL_FOUND)
-#     set(OpenCL_LIBRARY "")
-#     set(OpenCL_INCLUDE_DIRS "")
-# endif (NOT OPENCL_FOUND)
-
 set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} --expt-relaxed-constexpr")
 
-# add_definitions(-DOPENCL_ENABLED=${OPENCL_FOUND})
-
 include_directories(
-    ${CMAKE_CURRENT_SOURCE_DIR}/include  # 添加项目自身的include目录
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CUDA_INCLUDE_DIRS}
+    ${EIGEN3_INCLUDE_DIR}
+    ${EIGEN3_INCLUDE_DIRS}
+    ${OpenCV_INCLUDE_DIRS}
+    ${TENSORRT_INCLUDE_DIR}
     ${catkin_INCLUDE_DIRS}
-		${OpenCV_LIBS}
-	  # ${OpenCL_LIBRARY}
-    ${catkin_INCLUDE_DIRS}
-    /usr/include/glog
-    )
+)
 
 catkin_install_python(PROGRAMS scripts/publish_camera_info.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
@@ -104,16 +81,12 @@ target_link_libraries(Panorama
     PUBLIC motion_comp_cuda
     PUBLIC post_process_cuda
     PUBLIC OpenMP::OpenMP_CXX
-		${catkin_LIBRARIES}
+    ${catkin_LIBRARIES}
     ${OpenCV_LIBRARIES}
     ${cv_bridge_LIBRARIES}
-    # image_transport
     -lglog
     gflags
-    cudart
-    nvinfer
-    nvparsers
-    nvonnxparser
-    nvToolsExt
+    ${CUDA_LIBRARIES}
+    ${TENSORRT_LIBRARY}
 )
 add_dependencies(Panorama ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})

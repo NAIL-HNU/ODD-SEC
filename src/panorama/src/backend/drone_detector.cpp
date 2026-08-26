@@ -1,17 +1,16 @@
 #include <iostream>
 #include "backend/drone_detector.h"
 #include <fstream>
-#include <algorithm> // For std::sort
-#include <cmath>     // For expf
-#include <vector>    // For std::vector
-#include <string>    // For std::string
-#include <nvtx3/nvToolsExt.h>
+#include <algorithm>
+#include <cmath>
+#include <vector>
+#include <string>
 #include <ros/ros.h>
 #include <cv_bridge/cv_bridge.h>
 #include <sensor_msgs/Image.h>
 #include <visualization_msgs/Marker.h>
-#include <geometry_msgs/Point.h> // 确保包含
-#include <std_msgs/Header.h>     // 确保包含
+#include <geometry_msgs/Point.h>
+#include <std_msgs/Header.h>
 #include <boost/filesystem.hpp>
 
 #include <NvInfer.h>
@@ -25,14 +24,12 @@ class Logger : public ILogger {
 };
 static Logger gLogger;
 
-
 namespace panorama {
 
-// 构造函数中 nh->advertise 的修改
-DroneDetector::DroneDetector(ros::NodeHandle* nh_ptr) //更改参数名以避免与成员变量nh_混淆
-    : nh_("~"), // 成员nh_使用私有节点句柄初始化
-      m_marker_pub_ (nh_ptr->advertise<visualization_msgs::Marker>("polar_line_3d", 10)), // 使用传入的nh_ptr
-      m_count_image_pub_(nh_ptr->advertise<sensor_msgs::Image>("count_image", 10)) // 使用传入的nh_ptr
+DroneDetector::DroneDetector(ros::NodeHandle* nh_ptr)
+    : nh_("~"),
+      m_marker_pub_ (nh_ptr->advertise<visualization_msgs::Marker>("polar_line_3d", 10)),
+      m_count_image_pub_(nh_ptr->advertise<sensor_msgs::Image>("count_image", 10))
        {
 
 }
@@ -40,8 +37,7 @@ DroneDetector::DroneDetector(ros::NodeHandle* nh_ptr) //更改参数名以避免
 DroneDetector::~DroneDetector() {
     m_count_image_pub_.shutdown();
     m_marker_pub_.shutdown();
-    cleanupPostProcessBuffers(); // 清理新的缓冲区
-    // 如果 m_gpu_buffers 是在这里清理的，也要确保清理
+    cleanupPostProcessBuffers();
     if (m_gpu_buffers[0]) cudaFree(m_gpu_buffers[0]);
     if (m_gpu_buffers[1]) cudaFree(m_gpu_buffers[1]);
     if (m_gpu_buffers[2]) cudaFree(m_gpu_buffers[2]);
@@ -50,48 +46,40 @@ DroneDetector::~DroneDetector() {
 void DroneDetector::initialize(int camera_width, int camera_height,
     const DetectorParams &opt,
     std::vector<cv::Point3d>* precomputed_bearing_vectors_ptr){
+    m_initialized = false;
     m_params = opt;
 
     m_cam_width_ = camera_width;
     m_cam_height_ = camera_height;
 
-    // 从 opt 中获取阈值并赋值给成员变量
-
     m_precomputed_bearing_vectors_ptr_ = *precomputed_bearing_vectors_ptr;
 
     std::vector<double> R_matrix = m_params.image_opt.R_matrix;
     std::string engine_file_path = m_params.det_opt.engine_file_path;
-    // m_enable_rotation = m_params.det_opt.enable_rotation;
     m_enable_rotation = true;
 
     bag_file_path=m_params.file_opt.bag_file_path;
     boost::filesystem::path path_obj(bag_file_path);
     std::string bag_filename = path_obj.stem().string();
     
-    // 构建输出文件路径
-    output_path = "/home/zhx/codes/2_Drone_Dection/Dataset_Toolbox/src/panorama/data/" + 
-                             bag_filename + "_panorama_output.txt";
-
+    output_path = (boost::filesystem::path(m_params.file_opt.output_dir) /
+                   (bag_filename + "_panorama_output.txt")).string();
 
     if (R_matrix.size() == 9) {
         Eigen::Map<const Eigen::Matrix3d> R_raw(R_matrix.data());
-        m_R = R_raw.transpose();  // ROS数组是行优先，需转置为列优先
+        // ROS arrays are row-major; Eigen maps raw data as column-major.
+        m_R = R_raw.transpose();
     } else {
         ROS_ERROR("Invalid rotation matrix size. Using identity.");
         m_R = Eigen::Matrix3d::Identity();
     }
 
-    // 根据相机尺寸选择模型类型
-    // m_enable_rotation = true: 使用竖向模型 (480x640)
-    // m_enable_rotation = false: 使用横向模型 (640x480)
     std::string base_engine_path = m_params.det_opt.engine_file_path;
     
-    // 竖向模式
     if (m_enable_rotation == true) {
         m_engine_file_path = base_engine_path;
         size_t dot_pos = m_engine_file_path.find_last_of('.');
         if (dot_pos != std::string::npos) {
-            // m_engine_file_path.insert(dot_pos, "_vertical");
         } else {
             m_engine_file_path += "_vertical";
         }
@@ -106,13 +94,11 @@ void DroneDetector::initialize(int camera_width, int camera_height,
         }
         ROS_INFO("Horizontal mode: Using horizontal model: %s", m_engine_file_path.c_str());
     } else {
-        // 其他尺寸，使用默认模型
-        m_enable_rotation = false; // 默认使用横向模式
+        m_enable_rotation = false;
         m_engine_file_path = base_engine_path;
         ROS_INFO("Default mode: Using default model: %s", m_engine_file_path.c_str());
     }
 
-    // Initializing model
     if (!loadEngine(m_engine_file_path)) {
         ROS_ERROR("Engine loading failed, aborting initialization.");
         return;
@@ -123,7 +109,10 @@ void DroneDetector::initialize(int camera_width, int camera_height,
         return;
     }
 
-    !prepareBuffers();
+    if (!prepareBuffers()) {
+        ROS_ERROR("TensorRT buffer preparation failed.");
+        return;
+    }
 
     if (!initializePostProcessBuffers()) {
         ROS_ERROR("Post-processing buffers initialization failed.");
@@ -134,8 +123,6 @@ void DroneDetector::initialize(int camera_width, int camera_height,
     ROS_INFO("DroneDetector initialized successfully!");
 }
 
-
-// Loading engine
 bool DroneDetector::loadEngine(const std::string& engine_file_path) {
     std::ifstream engine_file(engine_file_path, std::ios::binary | std::ios::ate);
     if (!engine_file) {
@@ -155,7 +142,7 @@ bool DroneDetector::loadEngine(const std::string& engine_file_path) {
         return false;
     }
     engine_file.read(engine_data.data(), size);
-    engine_file.close(); // 关闭文件
+    engine_file.close();
 
     if (m_runtime) {
         delete m_runtime;
@@ -179,21 +166,20 @@ bool DroneDetector::loadEngine(const std::string& engine_file_path) {
     return true;
 }
 
-// Prepare GPU buffer for the following propressing
 bool DroneDetector::prepareBuffers() {
-    if (!m_engine || !m_context) { // 确保 context 也已创建
+    if (!m_engine || !m_context) {
         ROS_ERROR("Engine or context is null in prepareBuffers.");
         return false;
     }
-    if (m_engine->getNbIOTensors() < 2) {
-        ROS_ERROR("Engine does not have at least 2 I/O tensors.");
+    if (m_engine->getNbIOTensors() < 3) {
+        ROS_ERROR("Engine does not have the required 3 I/O tensors.");
         return false;
     }
     const char* input_tensor_name = m_engine->getIOTensorName(0);
     const char* sequence_tensor_name = m_engine->getIOTensorName(1);
     const char* output_tensor_name = m_engine->getIOTensorName(2);
 
-    if (!input_tensor_name || !output_tensor_name) {
+    if (!input_tensor_name || !sequence_tensor_name || !output_tensor_name) {
         ROS_ERROR("Failed to get I/O tensor names.");
         return false;
     }
@@ -201,7 +187,6 @@ bool DroneDetector::prepareBuffers() {
     m_input_dims = m_engine->getTensorShape(input_tensor_name);
     m_output_dims = m_engine->getTensorShape(output_tensor_name);
 
-    // 打印所有I/O张量信息以供调试
     ROS_INFO("Available I/O Tensors:");
     for (int32_t i = 0; i < m_engine->getNbIOTensors(); ++i) {
         const char* name = m_engine->getIOTensorName(i);
@@ -210,19 +195,16 @@ bool DroneDetector::prepareBuffers() {
     }
 
     nvinfer1::Dims batch_input_dims; 
-    batch_input_dims.nbDims = 4; // 例如：[N, C, H, W]
-    batch_input_dims.d[0] = 1; // Batch size
-    batch_input_dims.d[1] = m_input_c; // Channels
+    batch_input_dims.nbDims = 4;
+    batch_input_dims.d[0] = 1;
+    batch_input_dims.d[1] = m_input_c;
     
-    // 根据模式调整输入尺寸：配置中的H和W都是按横向模式设置的
     if (m_enable_rotation == true) {
-        // 竖向模式：交换H和W
-        batch_input_dims.d[2] = m_cam_width_;  // Height = 原Width
-        batch_input_dims.d[3] = m_cam_height_; // Width = 原Height
+        batch_input_dims.d[2] = m_cam_width_;
+        batch_input_dims.d[3] = m_cam_height_;
     } else {
-        // 横向模式：保持原配置
-        batch_input_dims.d[2] = m_cam_height_; // Height
-        batch_input_dims.d[3] = m_cam_width_;  // Width
+        batch_input_dims.d[2] = m_cam_height_;
+        batch_input_dims.d[3] = m_cam_width_;
     }
     
     if (m_engine->getTensorIOMode(input_tensor_name) == nvinfer1::TensorIOMode::kINPUT) {
@@ -235,12 +217,11 @@ bool DroneDetector::prepareBuffers() {
         return false;
     }
 
-    m_input_buffer_size_elements = 1; // batch size
-    nvinfer1::Dims actual_input_shape = m_engine->getTensorShape(input_tensor_name); // 获取设置后的形状
-    for (int j = 0; j < actual_input_shape.nbDims; ++j) { // 通常从0开始乘所有维度
+    m_input_buffer_size_elements = 1;
+    nvinfer1::Dims actual_input_shape = m_engine->getTensorShape(input_tensor_name);
+    for (int j = 0; j < actual_input_shape.nbDims; ++j) {
         m_input_buffer_size_elements *= actual_input_shape.d[j];
     }
-
 
     m_output_buffer_size_elements = 1;
     nvinfer1::Dims actual_output_shape = m_engine->getTensorShape(output_tensor_name);
@@ -248,23 +229,22 @@ bool DroneDetector::prepareBuffers() {
         m_output_buffer_size_elements *= actual_output_shape.d[j];
     }
 
-    // Malloc CUDA memory
-    // 确保之前的 m_gpu_buffers 已被正确 cudaFree
     if (m_gpu_buffers[0]) cudaFree(m_gpu_buffers[0]);
     if (m_gpu_buffers[1]) cudaFree(m_gpu_buffers[1]);
 
-    // Input Buffer
-    cudaMalloc(&m_gpu_buffers[0], m_input_buffer_size_elements * sizeof(float));  // image
-    cudaMalloc(&m_gpu_buffers[1], m_input_buffer_size_elements * 10 * sizeof(float));   // image sequence
-    cudaMalloc(&m_gpu_buffers[2], m_output_buffer_size_elements * sizeof(float)); // output buffer
+    cudaMalloc(&m_gpu_buffers[0], m_input_buffer_size_elements * sizeof(float));
+    cudaMalloc(&m_gpu_buffers[1], m_input_buffer_size_elements * 10 * sizeof(float));
+    cudaMalloc(&m_gpu_buffers[2], m_output_buffer_size_elements * sizeof(float));
 
-    // TensorRT 10.x: Binding context (setTensorAddress)
-    // setTensorAddress 使用张量名称
     if (!m_context->setTensorAddress(input_tensor_name, m_gpu_buffers[0])) {
         ROS_ERROR("Failed to set tensor address for input: %s", input_tensor_name);
         return false;
     }
-    if (!m_context->setTensorAddress(output_tensor_name, m_gpu_buffers[1])) {
+    if (!m_context->setTensorAddress(sequence_tensor_name, m_gpu_buffers[1])) {
+        ROS_ERROR("Failed to set tensor address for sequence: %s", sequence_tensor_name);
+        return false;
+    }
+    if (!m_context->setTensorAddress(output_tensor_name, m_gpu_buffers[2])) {
         ROS_ERROR("Failed to set tensor address for output: %s", output_tensor_name);
         return false;
     }
@@ -272,50 +252,42 @@ bool DroneDetector::prepareBuffers() {
     return true;
 }
 
-// Preprocessing images
-void DroneDetector::preprocessImage(const cv::Mat& image, std::vector<float>& input_buffer_host) { // Renamed for clarity
+void DroneDetector::preprocessImage(const cv::Mat& image, std::vector<float>& input_buffer_host) {
     cv::Mat rgb, resized;
 
-    // 确保 m_cam_width_ 和 m_cam_height_ > 0
     if (m_cam_width_ <= 0 || m_cam_height_ <= 0) {
         ROS_ERROR("Invalid dimensions for resizing: width=%d, height=%d", m_cam_width_, m_cam_height_);
-        input_buffer_host.clear(); // Indicate error
+        input_buffer_host.clear();
         return;
     }
 
     if (image.channels() == 1) {
         cv::cvtColor(image, rgb, cv::COLOR_GRAY2BGR);
     } else if (image.channels() == 3) {
-        rgb = image.clone(); // Assuming it's BGR, TRT typically wants RGB
-        // cv::cvtColor(image, rgb, cv::COLOR_BGR2RGB); // Uncomment if your model expects RGB
+        rgb = image.clone();
     } else {
         ROS_ERROR("Unsupported image channel count: %d", image.channels());
         input_buffer_host.clear();
         return;
     }
 
-    // 根据模式调整图像尺寸：配置中的H和W都是按横向模式设置的
     cv::Size target_size;
     if (m_enable_rotation == true) {
-        // 竖向模式：交换H和W
         target_size = cv::Size(m_cam_height_, m_cam_width_);
     } else {
-        // 横向模式：保持原配置
         target_size = cv::Size(m_cam_width_, m_cam_height_);
     }
     cv::resize(rgb, resized, target_size);
-    resized.convertTo(resized, CV_32F); // Normalize to [0,1] if model expects it
+    resized.convertTo(resized, CV_32F);
 
-    // HWC -> CHW
-    // 确保 m_input_c (channels) > 0
     if (m_input_c <= 0) {
         ROS_ERROR("Invalid input channel count for preprocessing: %d", m_input_c);
         input_buffer_host.clear();
         return;
     }
-    input_buffer_host.resize(static_cast<size_t>(m_input_c) * m_cam_height_ * m_cam_width_); // Use static_cast for size_t
+    input_buffer_host.resize(static_cast<size_t>(m_input_c) * m_cam_height_ * m_cam_width_);
     std::vector<cv::Mat> channels(m_input_c);
-    cv::split(resized, channels); // resized should be 3-channel here
+    cv::split(resized, channels);
 
     size_t channel_size_bytes = static_cast<size_t>(m_cam_height_) * m_cam_width_ * sizeof(float);
     for (int c = 0; c < m_input_c; ++c) {
@@ -324,7 +296,6 @@ void DroneDetector::preprocessImage(const cv::Mat& image, std::vector<float>& in
                     channels[c].data,
                     channel_size_bytes);
         } else {
-            // Handle non-continuous Mats if necessary, though split usually makes them continuous
             for (int i = 0; i < m_cam_height_; ++i) {
                 memcpy(input_buffer_host.data() + c * (m_cam_height_ * m_cam_width_) + i * m_cam_width_,
                        channels[c].ptr<float>(i),
@@ -336,59 +307,45 @@ void DroneDetector::preprocessImage(const cv::Mat& image, std::vector<float>& in
 
 void DroneDetector::prepareSequenceInput(const std::vector<cv::Mat>& sequence_images, 
     std::vector<float>& sequence_input_host) {
-    // 1. 检查输入有效性
     if (sequence_images.empty()) {
         ROS_ERROR("Empty image sequence provided!");
         return;
     }
 
-    // 2. 计算总元素数量（假设所有图像尺寸相同）
     const int num_frames = sequence_images.size();
     
-    // 根据模式计算帧大小：配置中的H和W都是按横向模式设置的
     int frame_size;
     if (m_enable_rotation == true) {
-        // 竖向模式：交换H和W
         frame_size = m_cam_height_ * m_cam_width_;
     } else {
-        // 横向模式：保持原配置
         frame_size = m_cam_width_ * m_cam_height_;
     }
     const int total_elements = num_frames * frame_size;
 
-    // 3. 预分配主机内存
     sequence_input_host.resize(total_elements);
 
-    // 4. 处理每一帧
     for (int i = 0; i < num_frames; ++i) {
         const cv::Mat& frame = sequence_images[i];
 
-        // 4.1 基础检查
         if (frame.empty()) {
             ROS_ERROR("Invalid frame %d in sequence!", i);
             continue;
         }
 
-        // 4.2 根据模式调整尺寸：配置中的H和W都是按横向模式设置的
         cv::Mat resized_frame;
         cv::Size target_size;
         if (m_enable_rotation == true) {
-            // 竖向模式：交换H和W
             target_size = cv::Size(m_cam_height_, m_cam_width_);
         } else {
-            // 横向模式：保持原配置
             target_size = cv::Size(m_cam_width_, m_cam_height_);
         }
         cv::resize(frame, resized_frame, target_size);
 
-        // 4.3 直接将uint8像素转换为float并拷贝
         int target_width, target_height;
         if (m_enable_rotation == true) {
-            // 竖向模式：交换H和W
             target_width = m_cam_height_;
             target_height = m_cam_width_;
         } else {
-            // 横向模式：保持原配置
             target_width = m_cam_width_;
             target_height = m_cam_height_;
         }
@@ -408,28 +365,20 @@ std::vector<cv::Mat> DroneDetector::createSequenceImages(const std::vector<int>&
         return {};
     }
 
-    // 1. 准备好包含所有通道数据的uchar向量
     std::vector<uchar> image_data(count_image.begin(), count_image.end());
 
-    // 2. 准备一个空的vector来存放最终的10张图像
     std::vector<cv::Mat> sequence_images;
     sequence_images.reserve(num_channels);
 
-    // 3. 计算单个通道图像所占的字节数
     const size_t channel_byte_size = static_cast<size_t>(camera_height) * camera_width;
 
-    // 4. 循环遍历10个通道，逐个提取和处理
     for (int ch = 0; ch < num_channels; ++ch) {
-        // a. 计算当前通道在长向量中的数据起始指针
         uchar* channel_data_ptr = image_data.data() + ch * channel_byte_size;
 
-        // b. 创建一个零拷贝的Mat头，直接指向该通道的数据
         cv::Mat channel_mat_header(camera_height, camera_width, CV_8UC1, channel_data_ptr);
 
-        // c. clone()数据，创建拥有独立内存的、干净的单通道图像
         cv::Mat channel_mat = channel_mat_header.clone();
 
-        // d. 如果需要，对这张干净的单通道图进行旋转
         if (m_enable_rotation) {
             cv::Mat rotated_channel;
             cv::rotate(channel_mat, rotated_channel, cv::ROTATE_90_COUNTERCLOCKWISE);
@@ -442,7 +391,6 @@ std::vector<cv::Mat> DroneDetector::createSequenceImages(const std::vector<int>&
     return sequence_images;
 }
 
-// Main detector
 std::vector<Detection> DroneDetector::detect(const std::vector<cv::Mat>& sequence_images, std::string time_path, ros::Time t0) {
 
     if (!m_initialized || sequence_images.empty() || sequence_images[0].empty()) {
@@ -450,13 +398,11 @@ std::vector<Detection> DroneDetector::detect(const std::vector<cv::Mat>& sequenc
         return {};
     }
 
-    // pop the first channel as image
-    // 记录开始时间
     auto start_time = std::chrono::high_resolution_clock::now();
 
     const cv::Mat& image = sequence_images[0];
 
-    std::vector<float> preprocess_input_host; // Host buffer
+    std::vector<float> preprocess_input_host;
     preprocessImage(image, preprocess_input_host);
     if (preprocess_input_host.empty()) {
         ROS_ERROR("Preprocessing failed.");
@@ -465,21 +411,19 @@ std::vector<Detection> DroneDetector::detect(const std::vector<cv::Mat>& sequenc
     std::vector<float> sequence_input_host;
     prepareSequenceInput(sequence_images, sequence_input_host);
 
-    // Copy preprocessed data to GPU
-    if (cudaMemcpyAsync(m_gpu_buffers[0], preprocess_input_host.data(), // Use host buffer
+    if (cudaMemcpyAsync(m_gpu_buffers[0], preprocess_input_host.data(),
                         m_input_buffer_size_elements * sizeof(float),
                         cudaMemcpyHostToDevice, m_cuda_stream) != cudaSuccess) {
         ROS_ERROR("Failed to copy input data to GPU.");
         return {};
     }
     if (cudaMemcpyAsync(m_gpu_buffers[1], sequence_input_host.data(),
-                        sequence_input_host.size() * sizeof(float), // 使用实际序列数据大小
+                        sequence_input_host.size() * sizeof(float),
                         cudaMemcpyHostToDevice, m_cuda_stream) != cudaSuccess) {
         ROS_ERROR("Failed to copy sequence data to GPU!");
         return {};
     }
 
-    // 设置Tensor地址
     const char* input_tensor_name = m_engine->getIOTensorName(0);
     const char* sequence_tensor_name = m_engine->getIOTensorName(1);
     const char* output_tensor_name = m_engine->getIOTensorName(2);
@@ -497,40 +441,32 @@ std::vector<Detection> DroneDetector::detect(const std::vector<cv::Mat>& sequenc
         return {};
     }
 
-    // 记录结束时间并计算耗时
     auto end_time = std::chrono::high_resolution_clock::now();
     double elapsed_ms = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count() / 1000.0;
 
-    // --- prepare events for timing ---
     cudaEvent_t evt_start, evt_infer_done, evt_h2d_done;
     cudaEventCreate(&evt_start);
     cudaEventCreate(&evt_infer_done);
     cudaEventCreate(&evt_h2d_done);
 
-    // Record start before enqueue
     cudaEventRecord(evt_start, m_cuda_stream);
 
-    // Inference: enqueue on m_cuda_stream
     auto infer_start = std::chrono::high_resolution_clock::now();
     if (!m_context->enqueueV3(m_cuda_stream)) {
         ROS_ERROR("Failed to execute inference via enqueueV3.");
         return {};
     }
-    // Note: enqueueV3 submitted kernels to m_cuda_stream
 
-    // Record an event right after enqueue to mark inference end (GPU-side)
     cudaEventRecord(evt_infer_done, m_cuda_stream);
 
-    // --- Allocate pinned host memory for output ---
     float* output_cpu_pinned = nullptr;
     size_t output_bytes = m_output_buffer_size_elements * sizeof(float);
-    cudaError_t err = cudaMallocHost((void**)&output_cpu_pinned, output_bytes); // pinned
+    cudaError_t err = cudaMallocHost((void**)&output_cpu_pinned, output_bytes);
     if (err != cudaSuccess) {
         ROS_ERROR("cudaMallocHost failed: %s", cudaGetErrorString(err));
         return {};
     }
 
-    // Launch async device->host copy on same stream
     auto post_start = std::chrono::high_resolution_clock::now();
     if (cudaMemcpyAsync(output_cpu_pinned, m_gpu_buffers[2],
                         output_bytes, cudaMemcpyDeviceToHost, m_cuda_stream) != cudaSuccess) {
@@ -538,34 +474,27 @@ std::vector<Detection> DroneDetector::detect(const std::vector<cv::Mat>& sequenc
         cudaFreeHost(output_cpu_pinned);
         return {};
     }
-    // mark event after copy
     cudaEventRecord(evt_h2d_done, m_cuda_stream);
 
-    // Now synchronize the stream (wait for copy to finish) — only here we block
     cudaStreamSynchronize(m_cuda_stream);
     auto post_end = std::chrono::high_resolution_clock::now();
     double post_elapsed_ms = std::chrono::duration_cast<std::chrono::microseconds>(post_end - post_start).count() / 1000.0;
 
-    // Measure GPU-side times precisely
     float t_infer_ms = 0.f, t_h2d_ms = 0.f;
-    cudaEventElapsedTime(&t_infer_ms, evt_start, evt_infer_done);   // GPU time for inference kernels
-    cudaEventElapsedTime(&t_h2d_ms, evt_infer_done, evt_h2d_done);  // GPU time for D2H copy
+    cudaEventElapsedTime(&t_infer_ms, evt_start, evt_infer_done);
+    cudaEventElapsedTime(&t_h2d_ms, evt_infer_done, evt_h2d_done);
 
     ROS_INFO("GPU inference time (event): %.3f ms, D2H copy (event): %.3f ms, host-measured post_elapsed: %.3f ms",
             t_infer_ms, t_h2d_ms, post_elapsed_ms);
 
-    // Now, if you need a std::vector, copy from pinned memory to vector (this is a CPU memcpy, fast)
     std::vector<float> output_cpu_buffer(m_output_buffer_size_elements);
     memcpy(output_cpu_buffer.data(), output_cpu_pinned, output_bytes);
 
-    // free pinned
     cudaFreeHost(output_cpu_pinned);
 
-    // destroy events
     cudaEventDestroy(evt_start);
     cudaEventDestroy(evt_infer_done);
     cudaEventDestroy(evt_h2d_done);
-
 
     std::ofstream outFile(time_path, std::ios::app);
     outFile << "[ " << t0 << " ] transform 2 " << elapsed_ms << std::endl;
@@ -575,84 +504,29 @@ std::vector<Detection> DroneDetector::detect(const std::vector<cv::Mat>& sequenc
 
     return postprocessResults(output_cpu_buffer.data(), image.cols, image.rows);
 
-    // // 后处理 - 修改为单目标检测
-    // float h_score;
-    // std::vector<float> h_box(4);
-    // bool h_found = false;
     
-    // postprocessResultsGPU(image.cols, image.rows, h_score, h_box, h_found);
     
-    // // 等待GPU完成
-    // cudaStreamSynchronize(m_cuda_stream);
     
-    // auto post_end = std::chrono::high_resolution_clock::now();
-    // double post_elapsed_ms = std::chrono::duration_cast<std::chrono::microseconds>(post_end - post_start).count() / 1000.0;
     
-    // std::vector<Detection> finalDetections;
-    // if (h_found) {
-    //     float scale_x = static_cast<float>(image.cols) / (m_enable_rotation ? m_cam_height_ : m_cam_width_);
-    //     float scale_y = static_cast<float>(image.rows) / (m_enable_rotation ? m_cam_width_ : m_cam_height_);
         
-    //     float x0 = h_box[0] * scale_x;
-    //     float y0 = h_box[1] * scale_y;
-    //     float x1 = h_box[2] * scale_x;
-    //     float y1 = h_box[3] * scale_y;
         
-    //     finalDetections.push_back({
-    //         cv::Rect(static_cast<int>(x0), static_cast<int>(y0), 
-    //                  static_cast<int>(x1 - x0), static_cast<int>(y1 - y0)),
-    //         h_score,
-    //         0  // 类别ID
-    //     });
-    // }
 
-    // // 记录时间
-
-    // return finalDetections;
 }
 
-
-
-
-// void DroneDetector::postprocessResultsGPU(
-//     int original_image_width, int original_image_height,
-//     float& h_score, std::vector<float>& h_box, bool& h_found
-// ) {
-//     // 清零找到的检测标志
-//     cudaMemsetAsync(m_gpu_found_detection, 0, sizeof(int), m_cuda_stream);
     
-//     // 启动单目标检测核函数
-//     launch_find_single_target(
-//         static_cast<float*>(m_gpu_buffers[2]),
-//         m_conf_thresh,
-//         m_gpu_best_box,
-//         m_gpu_best_score,
-//         m_gpu_found_detection,
-//         m_cuda_stream
-//     );
     
-//     // 异步拷贝结果
-//     cudaMemcpyAsync(&h_found, m_gpu_found_detection, sizeof(int), 
-//                    cudaMemcpyDeviceToHost, m_cuda_stream);
-//     cudaMemcpyAsync(&h_score, m_gpu_best_score, sizeof(float), 
-//                    cudaMemcpyDeviceToHost, m_cuda_stream);
-//     cudaMemcpyAsync(h_box.data(), m_gpu_best_box, 4 * sizeof(float), 
-//                    cudaMemcpyDeviceToHost, m_cuda_stream);
-// }
-
-
-
 
 std::vector<Detection> DroneDetector::postprocessResults(const float* output, int original_image_width, int original_image_height) {
     std::vector<Detection> detections;
 
-    if (m_output_dims.nbDims < 2) { // Basic check
+    if (m_output_dims.nbDims < 2) {
         ROS_ERROR("Output dimensions are not as expected. nbDims: %d", m_output_dims.nbDims);
         return {};
     }
     
 
-    int num_elements_per_proposal = 7; // As per your existing code [xc,yc,w,h,obj,cls,cid]
+    // Proposal layout: [cx, cy, width, height, objectness, class score, class ID].
+    int num_elements_per_proposal = 7;
     if (m_output_buffer_size_elements == 0 || (m_output_buffer_size_elements % num_elements_per_proposal != 0) ) {
         ROS_ERROR("Output buffer size (%ld) is not a multiple of elements per proposal (%d).", 
                   static_cast<long>(m_output_buffer_size_elements), num_elements_per_proposal);
@@ -660,21 +534,17 @@ std::vector<Detection> DroneDetector::postprocessResults(const float* output, in
     }
     int num_proposals = m_output_buffer_size_elements / num_elements_per_proposal;
 
+    const int MIN_BOX_DIM = 5;
+    const int MAX_CLASS_ID = 10;
+    const float MIN_AREA_RATIO = 0.001f;
+    const float MIN_ASPECT_RATIO = 0.2f;
+    const float MAX_ASPECT_RATIO = 5.0f;
 
-    const int MIN_BOX_DIM = 5;        // 最小宽度/高度
-    const int MAX_CLASS_ID = 10;      // 最大类别ID
-    const float MIN_AREA_RATIO = 0.001f; // 最小面积比例
-    const float MIN_ASPECT_RATIO = 0.2f; // 最小宽高比
-    const float MAX_ASPECT_RATIO = 5.0f; // 最大宽高比
-
-    // 根据模式计算缩放坐标：配置中的H和W都是按横向模式设置的
     float scale_x, scale_y;
     if (m_enable_rotation == true) {
-        // 竖向模式：交换H和W
         scale_x = static_cast<float>(original_image_width) / m_cam_height_;
         scale_y = static_cast<float>(original_image_height) / m_cam_width_;
     } else {
-        // 横向模式：保持原配置
         scale_x = static_cast<float>(original_image_width) / m_cam_width_;
         scale_y = static_cast<float>(original_image_height) / m_cam_height_;
     }
@@ -685,16 +555,15 @@ std::vector<Detection> DroneDetector::postprocessResults(const float* output, in
         float width    = output[i * num_elements_per_proposal + 2];
         float height   = output[i * num_elements_per_proposal + 3];
 
-        // 直接缩放坐标到原始图像尺寸
         float x0 = (x_center - width / 2.0f) * scale_x;
         float y0 = (y_center - height / 2.0f) * scale_y;
         float x1 = (x_center + width / 2.0f) * scale_x;
         float y1 = (y_center + height / 2.0f) * scale_y;
 
         float obj_conf = output[i * num_elements_per_proposal + 4];
-        float cls_conf = output[i * num_elements_per_proposal + 5]; // Assuming single class or max class score
-        int   cid = static_cast<int>(output[i * num_elements_per_proposal + 6] + 0.5f); // Add 0.5 for rounding before cast
-        float score = obj_conf * cls_conf; // Or just obj_conf if cls_conf is already class-specific score
+        float cls_conf = output[i * num_elements_per_proposal + 5];
+        int   cid = static_cast<int>(output[i * num_elements_per_proposal + 6] + 0.5f);
+        float score = obj_conf * cls_conf;
 
         int box_w = static_cast<int>(x1 - x0);
         int box_h = static_cast<int>(y1 - y0);
@@ -713,24 +582,18 @@ std::vector<Detection> DroneDetector::postprocessResults(const float* output, in
             detections.push_back({cv::Rect(static_cast<int>(x0), static_cast<int>(y0), box_w, box_h), score, cid});
         }
     }
-    // NMS is applied after collecting all potential detections
     auto finalDets = doNMS(detections, m_nms_thresh);
-    // 计算finalDets的尺寸
     int num_final_dets = static_cast<int>(finalDets.size());
 
     return finalDets;
 }
 
-
-
-// Compute IoU
 float DroneDetector::iou(const cv::Rect& a, const cv::Rect& b) {
     float inter_area = static_cast<float>((a & b).area());
     float union_area = static_cast<float>(a.area() + b.area() - inter_area);
-    return (union_area > 1e-6) ? (inter_area / union_area) : 0.0f; // Avoid division by zero or very small numbers
+    return (union_area > 1e-6) ? (inter_area / union_area) : 0.0f;
 }
 
-// NMS
 std::vector<Detection> DroneDetector::doNMS(const std::vector<Detection>& detections, float iou_thresh) {
     if (detections.empty()) {
         return {};
@@ -753,8 +616,7 @@ std::vector<Detection> DroneDetector::doNMS(const std::vector<Detection>& detect
             if (suppressed[j]) {
                 continue;
             }
-            // 仅对相同类别的进行NMS (如果你的模型有多类别且希望分别NMS)
-            if (sorted_detections[i].class_id == sorted_detections[j].class_id) { // Ensure class_id is relevant
+            if (sorted_detections[i].class_id == sorted_detections[j].class_id) {
                  if (iou(sorted_detections[i].box, sorted_detections[j].box) > iou_thresh) {
                     suppressed[j] = true;
                 }
@@ -765,7 +627,6 @@ std::vector<Detection> DroneDetector::doNMS(const std::vector<Detection>& detect
 }
 
 void DroneDetector::show_count_image(cv::Mat& frame, const std::vector<Detection>& detections, ros::Time& stamp) {
-    // Create image
     cv::Mat image_to_show;
         for (int y = 0; y < frame.rows; ++y) {
         for (int x = 0; x < frame.cols; ++x) {
@@ -784,7 +645,6 @@ void DroneDetector::show_count_image(cv::Mat& frame, const std::vector<Detection
     if (!detections.empty()) {
         for (const auto& d: detections) {
 
-            // 边框变粗
             cv::rectangle(image_to_show, d.box, cv::Scalar(0, 0, 255), 4);
 
             char buf[64];
@@ -813,16 +673,8 @@ void DroneDetector::show_count_image(cv::Mat& frame, const std::vector<Detection
     }
 }
 
-
-
-
-
-void DroneDetector::AngleCalculations(float u,float v,ros::Time& t0,ros::Time& stamp) // Changed x,y to u,v for clarity (pixel coords)
+void DroneDetector::AngleCalculations(float u,float v,ros::Time& t0,ros::Time& stamp)
 {
-    // Ensure m_cam_width_ is not zero to prevent division by zero or incorrect indexing
-
-    // u=420;
-    // v=340;
 
     int x,y;
 
@@ -835,14 +687,10 @@ void DroneDetector::AngleCalculations(float u,float v,ros::Time& t0,ros::Time& s
         x=(int)u;
     }
     
-    // ROS_INFO("m_cam_width_: %d", m_cam_height_);
     const cv::Point3d bvec = m_precomputed_bearing_vectors_ptr_.at(y * m_cam_width_ + x);
-
-
 
     Eigen::Vector3d e_ray_cam;
     if (m_enable_rotation) {
-        // 逆时针旋转90度，在XY平面中
         e_ray_cam = Eigen::Vector3d(bvec.y, -bvec.x, bvec.z);
     } else {
         e_ray_cam = Eigen::Vector3d(bvec.x, bvec.y, bvec.z);
@@ -850,9 +698,6 @@ void DroneDetector::AngleCalculations(float u,float v,ros::Time& t0,ros::Time& s
     
 
     float t_diff = double(t0.toNSec() - stamp.toNSec()) / 1000000000.0 * 0.95;
-
-    // double result_x=double(bvec.x)+35/180*pi;
-    // double result_y=double(bvec.y)-2 * pi * t_diff;
 
     double cos_term = cos(2 * pi * t_diff);
     double sin_term = sin(2 * pi * t_diff);
@@ -867,27 +712,10 @@ void DroneDetector::AngleCalculations(float u,float v,ros::Time& t0,ros::Time& s
 
     const double theta = std::atan2(e_ray_w[0], e_ray_w[2]);
     const double phi= std::asin(e_ray_w[1] / e_ray_w.norm());
-    // std::cout << "u、v " << u << " " << v << std::endl;
-    // std::cout << "x、y、t " << x << " " << y << " " << t_diff << std::endl;
-    // std::cout << "t0、tamp " << t0.toNSec() << " " << stamp.toNSec() << std::endl;
-    // std::cout <<"bvec"<< bvec.x  << " " << bvec.y << " " << bvec.z<<std::endl;
-    // // std::cout <<"result_x result_y"<< result_x  << " " << result_y<<std::endl;
-    // std::cout << "e_ray_cam" << e_ray_cam[0] << " " << e_ray_cam[1] << " " << e_ray_cam[2] << std::endl;
-    // std::cout<<"e_ray_w[0] :"<< e_ray_w[0] <<std::endl;
-    // std::cout<<"e_ray_w[1] :"<< e_ray_w[1] <<std::endl;
-    // std::cout<<"e_ray_w[2] :"<< e_ray_w[2] <<std::endl;
-
-    // std::cout<<"phi :"<< phi <<std::endl;
-    // std::cout<<"theta :"<< theta <<std::endl;
-
-    // FIXME: for track alignment
-    // std::ofstream outFile("/home/zhx/codes/2_Drone_Dection/Dataset_Toolbox/src/panorama/data/panorama_output.txt", std::ios::app);
     std::ofstream outFile(output_path, std::ios::app);
     outFile << "[infer] Timestamp: " << t0.toNSec();
     outFile << " Phi: " << phi << " Theta: " << theta << std::endl;
     outFile.close();
-    // std::cout << "[infer] Timestamp: " << t0.toNSec() << " Phi: " << phi << " Theta: " << theta << std::endl;
-
     double r=2;
 
     publishSphericalMarker(m_marker_pub_, r, theta+pi, pi/2-phi,"map");
@@ -895,9 +723,6 @@ void DroneDetector::AngleCalculations(float u,float v,ros::Time& t0,ros::Time& s
 
 }
 
-
-// 球坐标转笛卡尔坐标
-// Assumes theta_rad is elevation from XY plane, phi_rad is azimuth in XY plane
 void DroneDetector::sphericalToCartesian(double r, double theta_rad, double phi_rad, 
     double& x, double& y, double& z) {
     x = r * sin(phi_rad) * cos(theta_rad);
@@ -905,52 +730,42 @@ void DroneDetector::sphericalToCartesian(double r, double theta_rad, double phi_
     z = r * cos(phi_rad);
 }
 
-
-    // 计算并发布Marker消息的函数
 void DroneDetector::publishSphericalMarker(ros::Publisher& pub, 
     double r, double theta_rad, double phi_rad, 
     const std::string& frame_id ) {
-    // 计算终点笛卡尔坐标
     double x_end, y_end, z_end;
     sphericalToCartesian(r, theta_rad, phi_rad, x_end, y_end, z_end);
 
-    // 1. 创建箭头Marker
     visualization_msgs::Marker arrow_marker;
     arrow_marker.header.frame_id = frame_id;
     arrow_marker.header.stamp = ros::Time::now();
     arrow_marker.ns = "polar_arrow_3d";
     arrow_marker.id = 0;
-    arrow_marker.type = visualization_msgs::Marker::ARROW;  // 修改为ARROW类型
+    arrow_marker.type = visualization_msgs::Marker::ARROW;
     arrow_marker.action = visualization_msgs::Marker::ADD;
 
-    // 设置箭头属性
-    arrow_marker.scale.x = 0.05;  // 箭杆直径
-    arrow_marker.scale.y = 0.1;   // 箭头直径
-    arrow_marker.scale.z = 0.0;   // 未使用
-    arrow_marker.color.b = 1.0;   // 蓝色箭头
+    arrow_marker.scale.x = 0.05;
+    arrow_marker.scale.y = 0.1;
+    arrow_marker.scale.z = 0.0;
+    arrow_marker.color.b = 1.0;
     arrow_marker.color.a = 1.0;
 
-    // 设置起点（原点）和终点
     geometry_msgs::Point start_point, end_point;
-    start_point.x = 0; start_point.y = 0; start_point.z = 0; // Origin
+    start_point.x = 0; start_point.y = 0; start_point.z = 0;
     end_point.x = x_end; end_point.y = y_end; end_point.z = z_end;
     arrow_marker.points.push_back(start_point);
     arrow_marker.points.push_back(end_point);
 
-    // 2. 创建文本Marker
     visualization_msgs::Marker text_marker;
     text_marker.header = arrow_marker.header;
     text_marker.ns = "polar_text_3d";
-    text_marker.id = 1; // Different ID for text
+    text_marker.id = 1;
     text_marker.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
     text_marker.action = visualization_msgs::Marker::ADD;
 
     const double rad_to_deg = 180.0 / pi;
     double theta_deg = theta_rad * rad_to_deg;
     double phi_deg = phi_rad * rad_to_deg;
-
-    // std::cout<<"[result] theta_deg :"<< theta_deg <<std::endl;
-    // std::cout<<"[result] phi_deg :"<< phi_deg <<std::endl;
 
     text_marker.text = "End: (" + std::to_string(x_end).substr(0, 4) + ", " + 
     std::to_string(y_end).substr(0, 4) + ", " + 
@@ -959,15 +774,14 @@ void DroneDetector::publishSphericalMarker(ros::Publisher& pub,
     ", θ=" + std::to_string(theta_deg).substr(0, 5) + "°" +
     ", φ=" + std::to_string(phi_deg).substr(0, 4) + "°";
 
-    // 关键修复：初始化文本的位姿（位置+方向）
-    text_marker.pose.position.x = 1.5;  // X坐标（可调整）
-    text_marker.pose.position.y = 1.5;  // Y坐标（可调整）
-    text_marker.pose.position.z = 2;  // Z坐标（可调整）
+    text_marker.pose.position.x = 1.5;
+    text_marker.pose.position.y = 1.5;
+    text_marker.pose.position.z = 2;
 
-    text_marker.pose.orientation.x = 0.0;  // 单位四元数
+    text_marker.pose.orientation.x = 0.0;
     text_marker.pose.orientation.y = 0.0;
     text_marker.pose.orientation.z = 0.0;
-    text_marker.pose.orientation.w = 1.0; // Identity quaternion
+    text_marker.pose.orientation.w = 1.0;
 
     text_marker.scale.x = 0.0;
     text_marker.scale.y = 0.0;
@@ -978,70 +792,60 @@ void DroneDetector::publishSphericalMarker(ros::Publisher& pub,
 
     text_marker.color.r = 1.0;
     text_marker.color.g = 1.0;
-    text_marker.color.b = 1.0; // White text
+    text_marker.color.b = 1.0;
     text_marker.color.a = 1.0;
     text_marker.lifetime = ros::Duration(0.5);
 
-    // 发布Markers
     pub.publish(arrow_marker);
     pub.publish(text_marker);
 }
 
 void DroneDetector::publishOriginAxes(ros::Publisher& pub, const std::string& frame_id ) {
-    // 创建Marker消息（三个箭头分别代表X/Y/Z轴）
     visualization_msgs::Marker x_axis, y_axis, z_axis;
 
-    // 公共属性设置
     auto initAxisMarker = [&](visualization_msgs::Marker& marker, int id, 
                             const geometry_msgs::Vector3& color, 
                             const geometry_msgs::Point& end_point) {
         marker.header.frame_id = frame_id;
         marker.header.stamp = ros::Time::now();
         marker.ns = "origin_axes";
-        marker.id = id;  // X轴=0, Y轴=1, Z轴=2
+        marker.id = id;
         marker.type = visualization_msgs::Marker::ARROW;
         marker.action = visualization_msgs::Marker::ADD;
-        marker.scale.x = 0.03;  // 箭杆直径
-        marker.scale.y = 0.08;   // 箭头直径
-        marker.scale.z = 0.0;   // 未使用
+        marker.scale.x = 0.03;
+        marker.scale.y = 0.08;
+        marker.scale.z = 0.0;
         marker.color.r = color.x;
         marker.color.g = color.y;
         marker.color.b = color.z;
         marker.color.a = 1.0;
         
-        // 起点为原点，终点为轴方向
         geometry_msgs::Point start_point;
         start_point.x = start_point.y = start_point.z = 0;
         marker.points.push_back(start_point);
         marker.points.push_back(end_point);
     };
 
-    // X轴（红色，长度为1.0）
     geometry_msgs::Vector3 red; red.x = 1.0; red.y = 0.0; red.z = 0.0;
     geometry_msgs::Point x_end; x_end.x = 1.0; x_end.y = 0.0; x_end.z = 0.0;
     initAxisMarker(x_axis, 0, red, x_end);
 
-    // Y轴（绿色，长度为1.0）
     geometry_msgs::Vector3 green; green.x = 0.0; green.y = 1.0; green.z = 0.0;
     geometry_msgs::Point y_end; y_end.x = 0.0; y_end.y = 1.0; y_end.z = 0.0;
     initAxisMarker(y_axis, 1, green, y_end);
 
-    // Z轴（蓝色，长度为1.0）
     geometry_msgs::Vector3 blue; blue.x = 0.0; blue.y = 0.0; blue.z = 1.0;
     geometry_msgs::Point z_end; z_end.x = 0.0; z_end.y = 0.0; z_end.z = 1.0;
     initAxisMarker(z_axis, 2, blue, z_end);
 
-    // 发布三个轴
     pub.publish(x_axis);
     pub.publish(y_axis);
     pub.publish(z_axis);
 }
 
-
 bool DroneDetector::initializePostProcessBuffers() {
     cudaError_t err;
     
-    // 分配单目标检测所需的内存
     err = cudaMalloc(&m_gpu_best_box, 4 * sizeof(float));
     if (err != cudaSuccess) {
         ROS_ERROR("Failed to allocate m_gpu_best_box: %s", cudaGetErrorString(err));
@@ -1060,7 +864,6 @@ bool DroneDetector::initializePostProcessBuffers() {
         return false;
     }
     
-    // 初始化这些变量
     cudaMemset(m_gpu_best_box, 0, 4 * sizeof(float));
     cudaMemset(m_gpu_best_score, 0, sizeof(float));
     cudaMemset(m_gpu_found_detection, 0, sizeof(int));
@@ -1068,7 +871,6 @@ bool DroneDetector::initializePostProcessBuffers() {
     return true;
 }
 
-// 清理后处理缓冲区
 void DroneDetector::cleanupPostProcessBuffers() {
     if (m_gpu_best_box) {
         cudaFree(m_gpu_best_box);

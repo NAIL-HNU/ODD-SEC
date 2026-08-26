@@ -1,41 +1,41 @@
-# Git相关
+# Version-control metadata
 .git
 .gitignore
 
-# 构建目录
+# Catkin and CMake build products
 build/
 devel/
 install/
+log/
+**/build/
+**/devel/
+**/install/
+**/.catkin_tools/
 
-# 日志文件
-*.log
-
-# 数据文件
+# Runtime data and platform-specific TensorRT engines are not needed by the
+# platform-independent core image.
 data/
-model/
+**/*.bag
+**/*.dat
+**/*.engine
+**/*.npy
 
-# Docker相关
-Dockerfile
-docker-compose.yml
-.dockerignore
-
-# 脚本文件
-scripts/
-
-# 文档
+# Local reports, documentation, and editor state
+analysis_report.txt
 *.md
 README*
-
-# 临时文件
-*.tmp
-*.temp
-
-# IDE相关
-.vscode/
+.agents/
+.codex/
 .idea/
+.vscode/
 *.swp
 *.swo
 
-# 系统文件
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+
+# Operating-system metadata
 .DS_Store
-Thumbs.db 
+Thumbs.db

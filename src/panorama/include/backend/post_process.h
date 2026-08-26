@@ -3,15 +3,13 @@
 
 #include <cuda_runtime.h>
 #include <vector>
-// #include "backend/drone_detector.h" // 包含Detection结构体的定义
 
 struct GpuDetection {
-    float box[4]; // x1, y1, x2, y2
+    float box[4];  // x1, y1, x2, y2
     float score;
     int class_id;
 };
 
-// 使用 extern "C" 确保C++编译器能够正确链接到CUDA C编译器生成的函数
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -26,4 +24,4 @@ extern "C" {
 }
 #endif
 
-#endif // POST_PROCESS_H
+#endif

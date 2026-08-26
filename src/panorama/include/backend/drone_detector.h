@@ -13,22 +13,18 @@
 #include "frontend/ang_vel_estimator.h"
 #include <vector>
 #include <string>
-#include <memory> // For std::unique_ptr
+#include <memory>
 #include <cuda_runtime_api.h>
 #include <NvInfer.h>
 #include "backend/post_process.h"
 using namespace nvinfer1;
 
-
 namespace panorama {
 
-
-// 检测结果结构体
 struct Detection {
     cv::Rect box;
     float score;
     int class_id;
-    // std::string class_name; // 可以选择添加类别名称
 };
 
 class AngVelEstimator;
@@ -38,14 +34,12 @@ public:
     DroneDetector(ros::NodeHandle* nh);
     ~DroneDetector();
     
-    // 参数初始化
     void initialize(int camera_width, int camera_height,
             const DetectorParams &opt,
             std::vector<cv::Point3d>* precomputed_bearing_vectors_ptr);
 
     void setFrontend(AngVelEstimator* ptr) { ang_vel_estimator_ = ptr; }
 
-    // 主检测函数
     std::vector<Detection> detect(const std::vector<cv::Mat>& sequence_images, std::string time_path, ros::Time t0);
     void show_count_image(cv::Mat& count_image, const std::vector<Detection>& detections, ros::Time& stamp);
     void AngleCalculations(float x,float y,ros::Time& t0,ros::Time& stamp);
@@ -55,15 +49,12 @@ private:
     bool prepareBuffers();
     void preprocessImage(const cv::Mat& image, std::vector<float>& input_buffer);
     std::vector<Detection> postprocessResults(const float* output_data, int original_image_width, int original_image_height);
-    // void postprocessResultsGPU(int original_image_width, int original_image_height,
-    //                           float& h_score, std::vector<float>& h_box, bool& h_found);
     static float iou(const cv::Rect& a, const cv::Rect& b);
     static std::vector<Detection> doNMS(const std::vector<Detection>& detections, float iou_thresh);
     void sphericalToCartesian(double r, double theta_rad, double phi_rad, double& x, double& y, double& z);
     void publishSphericalMarker(ros::Publisher& pub, double r, double theta_rad, double phi_rad, const std::string& frame_id );
     void publishOriginAxes(ros::Publisher& pub, const std::string& frame_id ) ;
     void prepareSequenceInput(const std::vector<cv::Mat>& sequence_images, std::vector<float>& sequence_input_host);
-    // std::vector<Detection> postprocessResultsGPU(int original_image_width, int original_image_height);
     bool initializePostProcessBuffers();
     void cleanupPostProcessBuffers();
 
@@ -82,10 +73,9 @@ private:
 
     int m_cam_width_, m_cam_height_;
 
-    // 标志位
     bool m_initialized = false;
-    bool m_enable_rotation = true; // 模型选择标志：true=竖向模型，false=横向模型
-    std::string m_engine_file_path; // 存储实际的模型文件路径
+    bool m_enable_rotation = true;
+    std::string m_engine_file_path;
 
     AngVelEstimator* ang_vel_estimator_;
 
@@ -102,14 +92,11 @@ private:
     float m_nms_thresh = 0.5f;
     int m_max_detections = 100;
 
-    // 用于GPU后处理的缓冲区
-    // GPU缓冲区
     
-    // 单目标检测GPU变量
     float* m_gpu_best_box = nullptr;
     float* m_gpu_best_score = nullptr;
     int* m_gpu_found_detection = nullptr;
 
 };
 }
-#endif // DRONE_DETECTOR_H
+#endif

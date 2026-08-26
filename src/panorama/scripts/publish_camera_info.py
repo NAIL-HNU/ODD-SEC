@@ -7,7 +7,7 @@ def publish_camera_info():
     pub = rospy.Publisher('/dvs/camera_info', CameraInfo, queue_size=1, latch=True)
     
     msg = CameraInfo()
-    msg.header.frame_id = "dvs_camera"  # 必须非空，否则某些节点会忽略
+    msg.header.frame_id = "dvs_camera"
     msg.height = 480
     msg.width = 640
     msg.distortion_model = "plumb_bob"
